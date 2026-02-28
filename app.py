@@ -9,6 +9,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -314,4 +320,6 @@ async def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    reload = not os.environ.get("SYSTEMD_EXEC_PID")  # disable reload under systemd
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=reload)
