@@ -1,0 +1,12 @@
+GPU & CUDA Code Review
+Review this repository's GPU and CUDA code for correctness, performance, and best practices. Cover:
+
+1. **Memory Management** — Are device allocations and frees balanced? Any leaks? Is pinned/managed memory used appropriately?
+2. **Kernel Design** — Thread block sizing, occupancy, register pressure, shared memory usage.
+3. **Memory Access Patterns** — Coalesced global memory access? Bank conflicts in shared memory?
+4. **Synchronization** — Correct use of __syncthreads(), atomics, streams, and events? Any race conditions?
+5. **Error Checking** — Are CUDA API calls checked for errors? Is cudaGetLastError() used after kernel launches?
+6. **Host-Device Transfers** — Minimized and overlapped with computation where possible?
+7. **Portability** — Will this work across different compute capabilities? Any hardcoded assumptions?
+
+Provide specific line references, explain each issue, and suggest concrete fixes. Prioritize correctness issues over performance suggestions.

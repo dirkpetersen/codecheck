@@ -1,0 +1,11 @@
+General Code Quality Review
+Review this repository for code quality, maintainability, and best practices. Provide a structured report covering:
+
+1. **Architecture & Structure** — How well is the code organized? Are there clear separations of concerns?
+2. **Code Quality** — Readability, naming conventions, duplication, complexity.
+3. **Error Handling** — Are errors handled consistently and gracefully?
+4. **Dependencies** — Are dependencies up to date? Any known vulnerabilities or unnecessary packages?
+5. **Documentation** — Is the code self-documenting? Are complex sections explained?
+6. **Testing** — Are there tests? What's the coverage like? Any obvious gaps?
+
+For each area, rate it (Good / Needs Improvement / Critical) and provide specific file references and actionable suggestions. Focus on the most impactful improvements first.

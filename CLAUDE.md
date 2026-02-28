@@ -83,6 +83,30 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `bedrock`) |
 | `AWS_DEFAULT_REGION` | Bedrock region (default: `us-west-2`) |
 
+## Development Commands
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run dev server (auto-reload)
+python app.py
+# or: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+# App is served at http://localhost:8000
+```
+
+## Project Structure
+
+```
+app.py                  # FastAPI backend (routes, Claude invocation, SSE streaming)
+static/index.html       # Single-page frontend (dark UI, markdown rendering)
+prompts/*.prmpt         # Shipped prompt templates
+~/.codecheck/prompts/   # User-local prompt templates (merged at runtime)
+requirements.txt        # Python dependencies
+claude-skills/          # Symlink to sibling repo with Claude invocation reference code
+```
+
 ## UI Design Decisions
 
 - **Single process**: FastAPI serves both the HTML page and the `/api/evaluate` SSE endpoint

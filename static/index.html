@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>codecheck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-root:#0d1117;
+  --bg-surface:#161b22;
+  --bg-surface-raised:#1c2129;
+  --bg-inset:#0d1117;
+  --border:#30363d;
+  --border-bright:#484f58;
+  --text-primary:#e6edf3;
+  --text-secondary:#8b949e;
+  --text-muted:#6e7681;
+  --accent:#58a6ff;
+  --accent-dim:#1f6feb;
+  --accent-glow:rgba(88,166,255,.15);
+  --green:#3fb950;
+  --red:#f85149;
+  --orange:#d29922;
+  --font-body:'DM Sans',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+  --radius:8px;
+  --radius-lg:12px;
+}
+html{font-size:15px;-webkit-font-smoothing:antialiased}
+body{
+  background:var(--bg-root);
+  color:var(--text-primary);
+  font-family:var(--font-body);
+  line-height:1.6;
+  min-height:100vh;
+}
+/* ── Scanline texture on body ── */
+body::before{
+  content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,.03) 2px,
+    rgba(0,0,0,.03) 4px
+  );
+}
+
+/* ── Layout ── */
+.shell{display:flex;min-height:100vh}
+
+/* ── Sidebar ── */
+.sidebar{
+  width:260px;
+  flex-shrink:0;
+  background:var(--bg-surface);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  transition:transform .25s ease,opacity .25s ease;
+}
+.sidebar.collapsed{
+  transform:translateX(-260px);
+  position:absolute;opacity:0;pointer-events:none;
+}
+.sidebar-header{
+  padding:20px 16px 12px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.sidebar-header h3{
+  font-size:.75rem;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;
+  color:var(--text-muted);
+}
+.sidebar-list{
+  flex:1;overflow-y:auto;padding:8px;
+}
+.sidebar-list::-webkit-scrollbar{width:4px}
+.sidebar-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+.history-item{
+  padding:10px 12px;border-radius:var(--radius);cursor:pointer;
+  border:1px solid transparent;
+  transition:background .15s,border-color .15s;
+  margin-bottom:4px;
+}
+.history-item:hover{background:var(--bg-surface-raised);border-color:var(--border)}
+.history-item.active{background:var(--accent-glow);border-color:var(--accent-dim)}
+.history-item .repo-name{
+  font-family:var(--font-mono);font-size:.8rem;font-weight:500;
+  color:var(--text-primary);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.history-item .timestamp{
+  font-size:.7rem;color:var(--text-muted);margin-top:2px;
+}
+.sidebar-empty{
+  padding:24px 16px;text-align:center;
+  color:var(--text-muted);font-size:.8rem;
+  line-height:1.5;
+}
+
+/* ── Main content ── */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+/* ── Top bar ── */
+.topbar{
+  padding:16px 28px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:14px;
+}
+.sidebar-toggle{
+  background:none;border:1px solid var(--border);
+  color:var(--text-secondary);
+  width:32px;height:32px;border-radius:var(--radius);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .15s,color .15s,border-color .15s;
+  flex-shrink:0;
+}
+.sidebar-toggle:hover{background:var(--bg-surface-raised);color:var(--text-primary);border-color:var(--border-bright)}
+.logo{display:flex;align-items:baseline;gap:10px}
+.logo h1{
+  font-family:var(--font-mono);font-weight:600;font-size:1.2rem;
+  background:linear-gradient(135deg,var(--accent),#a371f7);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+  letter-spacing:-.02em;
+}
+.logo span{
+  font-size:.78rem;color:var(--text-muted);font-weight:400;
+  position:relative;top:-1px;
+}
+
+/* ── Content area ── */
+.content{flex:1;overflow-y:auto;padding:32px 28px 48px}
+.content::-webkit-scrollbar{width:6px}
+.content::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+
+/* ── Form card ── */
+.form-card{
+  background:var(--bg-surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:24px;
+  max-width:740px;
+  margin:0 auto;
+}
+.form-row{margin-bottom:18px}
+.form-row:last-child{margin-bottom:0}
+.form-label{
+  display:block;font-size:.78rem;font-weight:600;
+  color:var(--text-secondary);margin-bottom:6px;
+  letter-spacing:.03em;
+}
+.form-input,
+.form-select,
+.form-textarea{
+  width:100%;
+  background:var(--bg-inset);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  color:var(--text-primary);
+  font-family:var(--font-mono);
+  font-size:.85rem;
+  padding:10px 14px;
+  outline:none;
+  transition:border-color .15s,box-shadow .15s;
+}
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus{
+  border-color:var(--accent-dim);
+  box-shadow:0 0 0 3px var(--accent-glow);
+}
+.form-input::placeholder{color:var(--text-muted)}
+.form-select{cursor:pointer;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;
+  padding-right:32px;
+}
+.form-select option{background:var(--bg-surface);color:var(--text-primary)}
+.form-textarea{
+  min-height:140px;resize:vertical;
+  font-family:var(--font-mono);font-size:.82rem;line-height:1.55;
+}
+.btn-evaluate{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--accent-dim);
+  color:#fff;
+  font-family:var(--font-body);font-size:.88rem;font-weight:600;
+  border:none;border-radius:var(--radius);
+  padding:11px 28px;cursor:pointer;
+  transition:background .15s,box-shadow .2s,transform .1s;
+}
+.btn-evaluate:hover{background:var(--accent);box-shadow:0 0 20px var(--accent-glow)}
+.btn-evaluate:active{transform:scale(.98)}
+.btn-evaluate:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-evaluate svg{width:16px;height:16px;flex-shrink:0}
+
+/* ── Results ── */
+.results-wrapper{
+  max-width:740px;margin:28px auto 0;
+}
+.results-wrapper.hidden{display:none}
+
+.status-bar{
+  display:flex;align-items:center;gap:8px;
+  margin-bottom:16px;
+}
+.status-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 12px;border-radius:20px;
+  font-size:.75rem;font-weight:500;
+  border:1px solid var(--border);
+  background:var(--bg-surface);
+  color:var(--text-secondary);
+}
+.status-badge.loading{border-color:var(--orange);color:var(--orange)}
+.status-badge.loading .dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--orange);
+  animation:pulse 1.2s ease infinite;
+}
+.status-badge.done{border-color:var(--green);color:var(--green)}
+.status-badge.error{border-color:var(--red);color:var(--red)}
+@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+
+.results-card{
+  background:var(--bg-surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:28px;
+  min-height:120px;
+  position:relative;
+}
+.results-card .md-output{
+  font-size:.9rem;line-height:1.7;
+  color:var(--text-primary);
+}
+
+/* ── Markdown rendered styles ── */
+.md-output h1,.md-output h2,.md-output h3,.md-output h4{
+  margin-top:1.4em;margin-bottom:.5em;
+  font-weight:600;color:var(--text-primary);
+  border-bottom:1px solid var(--border);
+  padding-bottom:6px;
+}
+.md-output h1{font-size:1.5rem;border:none}
+.md-output h2{font-size:1.2rem}
+.md-output h3{font-size:1.05rem;border:none}
+.md-output h4{font-size:.95rem;border:none}
+.md-output p{margin:.6em 0}
+.md-output ul,.md-output ol{margin:.6em 0;padding-left:1.6em}
+.md-output li{margin:.25em 0}
+.md-output code{
+  font-family:var(--font-mono);font-size:.82em;
+  background:rgba(110,118,129,.15);
+  padding:2px 6px;border-radius:4px;
+  color:#c9d1d9;
+}
+.md-output pre{
+  margin:.8em 0;border-radius:var(--radius);
+  border:1px solid var(--border);
+  overflow-x:auto;
+}
+.md-output pre code{
+  display:block;padding:16px;
+  background:var(--bg-inset);
+  font-size:.8rem;line-height:1.55;
+  border-radius:0;
+}
+.md-output blockquote{
+  border-left:3px solid var(--accent-dim);
+  padding:.4em 1em;margin:.8em 0;
+  color:var(--text-secondary);
+  background:rgba(31,111,235,.06);
+  border-radius:0 var(--radius) var(--radius) 0;
+}
+.md-output table{
+  border-collapse:collapse;width:100%;margin:.8em 0;
+  font-size:.85rem;
+}
+.md-output th,.md-output td{
+  border:1px solid var(--border);padding:8px 12px;text-align:left;
+}
+.md-output th{background:var(--bg-surface-raised);font-weight:600}
+.md-output a{color:var(--accent);text-decoration:none}
+.md-output a:hover{text-decoration:underline}
+.md-output hr{border:none;border-top:1px solid var(--border);margin:1.5em 0}
+.md-output strong{color:#fff}
+
+/* ── File issue button ── */
+.actions-bar{
+  margin-top:16px;display:flex;gap:10px;align-items:center;
+}
+.actions-bar.hidden{display:none}
+.btn-issue{
+  display:inline-flex;align-items:center;gap:6px;
+  background:transparent;
+  border:1px solid var(--green);
+  color:var(--green);
+  font-family:var(--font-body);font-size:.82rem;font-weight:500;
+  padding:8px 18px;border-radius:var(--radius);
+  cursor:pointer;transition:background .15s;
+}
+.btn-issue:hover{background:rgba(63,185,80,.1)}
+.btn-issue svg{width:14px;height:14px}
+.issue-status{font-size:.8rem;color:var(--text-muted)}
+
+/* ── Skeleton loader ── */
+.skeleton-line{
+  height:12px;border-radius:4px;
+  background:linear-gradient(90deg,var(--bg-surface-raised) 25%,var(--border) 50%,var(--bg-surface-raised) 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.5s infinite;
+  margin:10px 0;
+}
+.skeleton-line:nth-child(2){width:85%}
+.skeleton-line:nth-child(3){width:72%}
+.skeleton-line:nth-child(4){width:90%}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .sidebar{position:fixed;z-index:100;height:100vh;transform:translateX(-260px);opacity:0;pointer-events:none}
+  .sidebar.open{transform:translateX(0);opacity:1;pointer-events:all}
+  .content{padding:20px 16px 40px}
+  .topbar{padding:14px 16px}
+  .form-card,.results-wrapper{max-width:100%}
+}
+
+/* ── Entrance animations ── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.form-card{animation:fadeUp .4s ease both}
+.results-wrapper{animation:fadeUp .35s ease both .1s}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h3>History</h3>
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="Close sidebar">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10.5 3.5L3.5 10.5M3.5 3.5l7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sidebar-list" id="historyList">
+      <div class="sidebar-empty">No evaluations yet.<br>Results will appear here.</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <button class="sidebar-toggle" id="sidebarOpen" onclick="toggleSidebar()" title="Toggle history">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M2 7h10M2 10h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <div class="logo">
+        <h1>codecheck</h1>
+        <span>Code review powered by Claude</span>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Form -->
+      <div class="form-card">
+        <form id="evalForm" onsubmit="return handleSubmit(event)">
+          <div class="form-row">
+            <label class="form-label" for="repoUrl">Repository</label>
+            <input class="form-input" type="text" id="repoUrl" placeholder="user/repo  or  https://github.com/user/repo" required autocomplete="off" spellcheck="false">
+          </div>
+          <div class="form-row">
+            <label class="form-label" for="promptSelect">Prompt Template</label>
+            <select class="form-select" id="promptSelect">
+              <option value="">Loading templates...</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label" for="promptText">Prompt</label>
+            <textarea class="form-textarea" id="promptText" placeholder="Select a template above or write your own prompt..." required></textarea>
+          </div>
+          <div class="form-row">
+            <button class="btn-evaluate" type="submit" id="submitBtn">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg>
+              Evaluate Now
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Results -->
+      <div class="results-wrapper hidden" id="resultsWrapper">
+        <div class="status-bar" id="statusBar"></div>
+        <div class="results-card">
+          <div class="md-output" id="mdOutput"></div>
+        </div>
+        <div class="actions-bar hidden" id="actionsBar">
+          <button class="btn-issue" onclick="fileIssue()">
+            <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.5M8 10.5v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            File as GitHub Issue
+          </button>
+          <span class="issue-status" id="issueStatus"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+const history = [];
+let activeIdx = -1;
+let currentRaw = '';
+let currentRepoUrl = '';
+let ghAuthenticated = false;
+let evaluating = false;
+let eventSource = null;
+
+// ── Init ──
+document.addEventListener('DOMContentLoaded', () => {
+  loadPrompts();
+  checkGhAuth();
+  marked.setOptions({
+    highlight: (code, lang) => {
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(code, { language: lang }).value;
+      }
+      return hljs.highlightAuto(code).value;
+    },
+    breaks: false,
+    gfm: true,
+  });
+});
+
+async function loadPrompts() {
+  try {
+    const res = await fetch('/api/prompts');
+    const prompts = await res.json();
+    const sel = document.getElementById('promptSelect');
+    sel.innerHTML = '<option value="">— Select a prompt template —</option>';
+    prompts.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      opt.dataset.body = p.body;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => {
+      const opt = sel.options[sel.selectedIndex];
+      if (opt.dataset.body) {
+        document.getElementById('promptText').value = opt.dataset.body;
+      }
+    });
+  } catch (e) {
+    console.warn('Failed to load prompts:', e);
+    document.getElementById('promptSelect').innerHTML = '<option value="">No templates available</option>';
+  }
+}
+
+async function checkGhAuth() {
+  try {
+    const res = await fetch('/api/gh-auth');
+    const data = await res.json();
+    ghAuthenticated = data.authenticated;
+  } catch { ghAuthenticated = false; }
+}
+
+// ── Form submit ──
+function handleSubmit(e) {
+  e.preventDefault();
+  if (evaluating) return false;
+
+  const repoUrl = document.getElementById('repoUrl').value.trim();
+  const prompt = document.getElementById('promptText').value.trim();
+  if (!repoUrl || !prompt) return false;
+
+  startEvaluation(repoUrl, prompt);
+  return false;
+}
+
+async function startEvaluation(repoUrl, prompt) {
+  evaluating = true;
+  currentRepoUrl = repoUrl;
+  currentRaw = '';
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+
+  const wrapper = document.getElementById('resultsWrapper');
+  wrapper.classList.remove('hidden');
+
+  const output = document.getElementById('mdOutput');
+  output.innerHTML = '<div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>';
+
+  const actionsBar = document.getElementById('actionsBar');
+  actionsBar.classList.add('hidden');
+
+  setStatus('loading', 'Connecting...');
+
+  try {
+    const res = await fetch('/api/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_url: repoUrl, prompt }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      setStatus('error', err.error || 'Request failed');
+      output.innerHTML = '';
+      evaluating = false;
+      btn.disabled = false;
+      return;
+    }
+
+    output.innerHTML = '';
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete line
+
+      let eventType = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ') && eventType) {
+          const data = line.slice(6);
+          handleSSE(eventType, data);
+          eventType = null;
+        }
+      }
+    }
+  } catch (e) {
+    setStatus('error', 'Connection lost: ' + e.message);
+  }
+
+  evaluating = false;
+  btn.disabled = false;
+}
+
+function handleSSE(event, data) {
+  const output = document.getElementById('mdOutput');
+
+  switch (event) {
+    case 'status':
+      setStatus('loading', data);
+      break;
+
+    case 'chunk':
+      currentRaw += data + '\n';
+      renderMarkdown();
+      break;
+
+    case 'done':
+      setStatus('done', 'Analysis complete');
+      renderMarkdown();
+      addToHistory(currentRepoUrl, currentRaw);
+      if (ghAuthenticated) {
+        document.getElementById('actionsBar').classList.remove('hidden');
+      }
+      break;
+
+    case 'error':
+      setStatus('error', data);
+      break;
+  }
+}
+
+function renderMarkdown() {
+  const output = document.getElementById('mdOutput');
+  output.innerHTML = marked.parse(currentRaw);
+  // Re-highlight any code blocks that marked didn't catch
+  output.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
+}
+
+function setStatus(type, text) {
+  const bar = document.getElementById('statusBar');
+  const dot = type === 'loading' ? '<span class="dot"></span>' : '';
+  const icon = type === 'done' ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' :
+               type === 'error' ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' : '';
+  bar.innerHTML = `<span class="status-badge ${type}">${dot}${icon} ${escHtml(text)}</span>`;
+}
+
+// ── History ──
+function addToHistory(repoUrl, raw) {
+  const name = repoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  history.unshift({ name, time, raw, repoUrl });
+  activeIdx = 0;
+  renderHistory();
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  if (history.length === 0) {
+    list.innerHTML = '<div class="sidebar-empty">No evaluations yet.<br>Results will appear here.</div>';
+    return;
+  }
+  list.innerHTML = history.map((h, i) => `
+    <div class="history-item ${i === activeIdx ? 'active' : ''}" onclick="restoreHistory(${i})">
+      <div class="repo-name">${escHtml(h.name)}</div>
+      <div class="timestamp">${escHtml(h.time)}</div>
+    </div>
+  `).join('');
+}
+
+function restoreHistory(idx) {
+  if (evaluating) return;
+  activeIdx = idx;
+  const entry = history[idx];
+  currentRaw = entry.raw;
+  currentRepoUrl = entry.repoUrl;
+
+  document.getElementById('resultsWrapper').classList.remove('hidden');
+  setStatus('done', 'Analysis complete');
+  renderMarkdown();
+  renderHistory();
+
+  if (ghAuthenticated) {
+    document.getElementById('actionsBar').classList.remove('hidden');
+    document.getElementById('issueStatus').textContent = '';
+  }
+}
+
+// ── File issue ──
+async function fileIssue() {
+  const status = document.getElementById('issueStatus');
+  status.textContent = 'Filing issue...';
+
+  try {
+    const res = await fetch('/api/file-issue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repo_url: currentRepoUrl,
+        title: 'Code Review — codecheck',
+        content: currentRaw,
+      }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      status.innerHTML = `<a href="${escHtml(data.url)}" target="_blank" style="color:var(--green)">Issue created &rarr;</a>`;
+    } else {
+      status.textContent = data.error || 'Failed to create issue';
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Sidebar toggle ──
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+// ── Utils ──
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
