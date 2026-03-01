@@ -75,10 +75,17 @@ def resolve_repo_url(raw: str) -> str:
 
 
 def get_claude_bin() -> str | None:
-    """Return path to claude CLI, or None if unavailable or inside Claude Code."""
+    """Return path to claude CLI, or None if not found or inside Claude Code."""
     if os.environ.get("CLAUDECODE"):
         return None
-    return shutil.which("claude")
+    found = shutil.which("claude")
+    if found:
+        return found
+    # ~/bin/claude not always in systemd/service PATH
+    candidate = Path.home() / "bin" / "claude"
+    if candidate.is_file():
+        return str(candidate)
+    return None
 
 
 def check_gh_auth() -> bool:
@@ -96,13 +103,8 @@ def check_gh_auth() -> bool:
         return False
 
 
-async def stream_claude_cli(prompt: str, repo_dir: str):
-    """Run claude CLI and yield stdout lines as they arrive."""
-    claude_bin = get_claude_bin()
-    if not claude_bin:
-        yield _sse_event("error", "Claude CLI not available. Set ANTHROPIC_API_KEY for SDK fallback.")
-        return
-
+async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
+    """Run claude CLI in batch mode and yield stdout lines as they arrive."""
     cmd = [claude_bin, "-p", prompt, "--output-format", "text"]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -134,28 +136,25 @@ async def stream_claude_cli(prompt: str, repo_dir: str):
         yield _sse_event("done", "")
 
 
-async def stream_claude_sdk(prompt: str, repo_dir: str):
-    """Fallback: use Anthropic SDK with streaming."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        yield _sse_event("error", "No Claude CLI and no ANTHROPIC_API_KEY set.")
-        return
-
+async def stream_bedrock_sdk(prompt: str, repo_dir: str):
+    """Fallback when Claude CLI is unavailable: use Anthropic SDK via AWS Bedrock."""
     try:
         import anthropic
     except ImportError:
         yield _sse_event("error", "anthropic package not installed. Run: pip install anthropic")
         return
 
-    # Read repo files to build context
     context = _build_repo_context(repo_dir)
     full_prompt = f"{prompt}\n\n---\n\nRepository contents:\n\n{context}"
 
-    client = anthropic.Anthropic(api_key=api_key)
-
     try:
+        client = anthropic.AnthropicBedrock(
+            aws_profile="bedrock",
+            aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
+        )
+        model = os.environ.get("ANTHROPIC_MODEL", "global.anthropic.claude-sonnet-4-6")
         with client.messages.stream(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+            model=model,
             max_tokens=8192,
             messages=[{"role": "user", "content": full_prompt}],
         ) as stream:
@@ -163,7 +162,7 @@ async def stream_claude_sdk(prompt: str, repo_dir: str):
                 yield _sse_event("chunk", text)
         yield _sse_event("done", "")
     except Exception as e:
-        yield _sse_event("error", str(e))
+        yield _sse_event("error", f"Bedrock error: {e}")
 
 
 def _build_repo_context(repo_dir: str, max_bytes: int = 200_000) -> str:
@@ -259,13 +258,12 @@ async def evaluate(request: Request):
             repo_dir = tmp_dir + "/repo"
             yield _sse_event("status", "Analyzing code with Claude...")
 
-            # Try CLI first, fall back to SDK
             claude_bin = get_claude_bin()
             if claude_bin:
-                async for event in stream_claude_cli(prompt, repo_dir):
+                async for event in stream_claude_cli(claude_bin, prompt, repo_dir):
                     yield event
             else:
-                async for event in stream_claude_sdk(prompt, repo_dir):
+                async for event in stream_bedrock_sdk(prompt, repo_dir):
                     yield event
 
         finally:
