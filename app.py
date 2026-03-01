@@ -104,8 +104,8 @@ def check_gh_auth() -> bool:
 
 
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
-    """Run claude CLI in batch mode and yield stdout lines as they arrive."""
-    cmd = [claude_bin, "-p", prompt, "--output-format", "text"]
+    """Run claude CLI in batch mode, streaming output via stream-json format."""
+    cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
     # Claude CLI requires both ~/bin and ~/.local/bin in PATH on startup
     env = os.environ.copy()
     home = Path.home()
@@ -123,24 +123,31 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
         env=env,
     )
 
-    buffer = ""
+    line_buf = ""
     try:
         while True:
             chunk = await asyncio.wait_for(proc.stdout.read(256), timeout=300)
             if not chunk:
                 break
-            buffer += chunk.decode("utf-8", errors="replace")
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                yield _sse_event("chunk", line)
+            line_buf += chunk.decode("utf-8", errors="replace")
+            while "\n" in line_buf:
+                line, line_buf = line_buf.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Extract streamed text from assistant message events
+                if event.get("type") == "assistant":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "text" and block.get("text"):
+                            yield _sse_event("chunk", block["text"])
     except asyncio.TimeoutError:
         proc.kill()
         yield _sse_event("error", "Claude CLI timed out after 5 minutes.")
         return
-
-    # Flush remaining buffer
-    if buffer.strip():
-        yield _sse_event("chunk", buffer)
 
     await proc.wait()
 
