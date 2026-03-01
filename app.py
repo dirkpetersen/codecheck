@@ -116,6 +116,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
         env["PATH"] = ":".join(extra) + ":" + env.get("PATH", "")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=repo_dir,
@@ -123,14 +124,19 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
     )
 
     buffer = ""
-    while True:
-        chunk = await proc.stdout.read(256)
-        if not chunk:
-            break
-        buffer += chunk.decode("utf-8", errors="replace")
-        while "\n" in buffer:
-            line, buffer = buffer.split("\n", 1)
-            yield _sse_event("chunk", line)
+    try:
+        while True:
+            chunk = await asyncio.wait_for(proc.stdout.read(256), timeout=300)
+            if not chunk:
+                break
+            buffer += chunk.decode("utf-8", errors="replace")
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                yield _sse_event("chunk", line)
+    except asyncio.TimeoutError:
+        proc.kill()
+        yield _sse_event("error", "Claude CLI timed out after 5 minutes.")
+        return
 
     # Flush remaining buffer
     if buffer.strip():
