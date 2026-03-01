@@ -141,16 +141,9 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
                     continue
                 etype = event.get("type")
                 if etype == "assistant":
-                    # Intermediate narration (tool use steps) — show as status, not report
                     for block in event.get("message", {}).get("content", []):
                         if block.get("type") == "text" and block.get("text"):
-                            first_line = block["text"].strip().splitlines()[0][:120]
-                            yield _sse_event("status", first_line)
-                elif etype == "result":
-                    # Final compiled report — stream as content chunks
-                    result_text = event.get("result", "")
-                    if result_text:
-                        yield _sse_event("chunk", result_text)
+                            yield _sse_event("chunk", block["text"])
     except asyncio.TimeoutError:
         proc.kill()
         yield _sse_event("error", "Claude CLI timed out after 5 minutes.")
@@ -285,7 +278,7 @@ async def evaluate(request: Request):
                 return
 
             repo_dir = tmp_dir + "/repo"
-            yield _sse_event("status", "Analyzing code with Claude...")
+            yield _sse_event("status", "Analyzing with Claude Code...")
 
             claude_bin = get_claude_bin()
             if claude_bin:
