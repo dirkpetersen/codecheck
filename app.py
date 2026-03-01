@@ -106,11 +106,14 @@ def check_gh_auth() -> bool:
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
     """Run claude CLI in batch mode and yield stdout lines as they arrive."""
     cmd = [claude_bin, "-p", prompt, "--output-format", "text"]
-    # Ensure ~/bin is in PATH so claude CLI's own startup check passes
+    # Claude CLI requires both ~/bin and ~/.local/bin in PATH on startup
     env = os.environ.copy()
-    home_bin = str(Path.home() / "bin")
-    if home_bin not in env.get("PATH", "").split(":"):
-        env["PATH"] = home_bin + ":" + env.get("PATH", "")
+    home = Path.home()
+    path_parts = env.get("PATH", "").split(":")
+    prepend = [str(home / "bin"), str(home / ".local" / "bin")]
+    extra = [p for p in prepend if p not in path_parts]
+    if extra:
+        env["PATH"] = ":".join(extra) + ":" + env.get("PATH", "")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
