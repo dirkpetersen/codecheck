@@ -141,9 +141,16 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
                     continue
                 etype = event.get("type")
                 if etype == "assistant":
+                    # Show first line of narration as status badge only
                     for block in event.get("message", {}).get("content", []):
                         if block.get("type") == "text" and block.get("text"):
-                            yield _sse_event("chunk", block["text"])
+                            first_line = block["text"].strip().splitlines()[0][:120]
+                            yield _sse_event("status", first_line)
+                            break
+                elif etype == "result":
+                    result_text = event.get("result", "")
+                    if result_text and isinstance(result_text, str):
+                        yield _sse_event("chunk", result_text)
     except asyncio.TimeoutError:
         proc.kill()
         yield _sse_event("error", "Claude CLI timed out after 5 minutes.")
