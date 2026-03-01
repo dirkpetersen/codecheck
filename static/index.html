@@ -534,13 +534,17 @@ async function startEvaluation(repoUrl, prompt) {
       buffer = lines.pop(); // keep incomplete line
 
       let eventType = null;
+      let dataLines = [];
       for (const line of lines) {
         if (line.startsWith('event: ')) {
           eventType = line.slice(7).trim();
-        } else if (line.startsWith('data: ') && eventType) {
-          const data = line.slice(6);
-          handleSSE(eventType, data);
+          dataLines = [];
+        } else if (line.startsWith('data: ')) {
+          dataLines.push(line.slice(6));
+        } else if (line === '' && eventType) {
+          handleSSE(eventType, dataLines.join('\n'));
           eventType = null;
+          dataLines = [];
         }
       }
     }
