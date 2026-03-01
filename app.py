@@ -106,10 +106,18 @@ def check_gh_auth() -> bool:
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
     """Run claude CLI in batch mode and yield stdout lines as they arrive."""
     cmd = [claude_bin, "-p", prompt, "--output-format", "text"]
-    # Ensure the directory containing the claude binary is in PATH
+    # Build a PATH that includes all standard user bin dirs claude CLI expects
     env = os.environ.copy()
-    bin_dir = str(Path(claude_bin).parent)
-    env["PATH"] = bin_dir + ":" + env.get("PATH", "")
+    home = Path.home()
+    extra = [
+        str(home / "bin"),
+        str(home / ".local" / "bin"),
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+    existing = env.get("PATH", "").split(":")
+    env["PATH"] = ":".join(p for p in extra if p not in existing) + ":" + env.get("PATH", "")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
