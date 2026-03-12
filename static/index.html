@@ -185,7 +185,7 @@ body::before{
 }
 .form-select option{background:var(--bg-surface);color:var(--text-primary)}
 .form-textarea{
-  min-height:140px;resize:vertical;
+  min-height:200px;resize:vertical;
   font-family:var(--font-mono);font-size:.82rem;line-height:1.55;
 }
 .btn-evaluate{
@@ -377,7 +377,7 @@ body::before{
             <input class="form-input" type="text" id="repoUrl" placeholder="user/repo  or  https://github.com/user/repo" required autocomplete="off" spellcheck="false">
           </div>
           <div class="form-row">
-            <label class="form-label" for="promptSelect">Prompt Template</label>
+            <label class="form-label" for="promptSelect">Prompt Template <a href="https://github.com/dirkpetersen/codecheck/tree/main/prompts" target="_blank" rel="noopener" style="font-weight:400;color:var(--accent);font-size:.72rem;margin-left:6px;text-decoration:none" title="Want to add or improve a prompt template? Fork this repo, add or edit .prmpt files in the prompts/ folder (first line = template name, rest = prompt body), then open a pull request.">edit templates ↗</a></label>
             <select class="form-select" id="promptSelect">
               <option value="">Loading templates...</option>
             </select>
