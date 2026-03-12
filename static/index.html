@@ -377,7 +377,7 @@ body::before{
             <input class="form-input" type="text" id="repoUrl" placeholder="user/repo  or  https://github.com/user/repo" required autocomplete="off" spellcheck="false">
           </div>
           <div class="form-row">
-            <label class="form-label" for="promptSelect">Prompt Template <a href="https://github.com/dirkpetersen/codecheck/tree/main/prompts" target="_blank" rel="noopener" style="font-weight:400;color:var(--accent);font-size:.72rem;margin-left:6px;text-decoration:none" title="Want to add or improve a prompt template? Fork this repo, add or edit .prmpt files in the prompts/ folder (first line = template name, rest = prompt body), then open a pull request.">edit templates ↗</a></label>
+            <label class="form-label" for="promptSelect">Prompt Template <span style="font-weight:400;font-size:.72rem;color:var(--text-muted);margin-left:6px">templates [<a href="https://github.com/dirkpetersen/codecheck/tree/main/prompts" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none" title="Browse the built-in prompt template files on GitHub (read-only)">view</a>] [<a href="https://github.com/dirkpetersen/codecheck/fork" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none" title="Fork this repo to your own GitHub account, then add or edit .prmpt files in the prompts/ folder. The first line of each file is the template name. Open a pull request when you're done to share your templates.">fork</a>]</span></label>
             <select class="form-select" id="promptSelect">
               <option value="">Loading templates...</option>
             </select>
