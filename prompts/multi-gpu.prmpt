@@ -1,0 +1,27 @@
+Multi-GPU Utilization Review
+Review this repository to determine whether it uses multiple GPUs, how effectively it does so, and what improvements are possible. Structure your report as follows:
+
+1. **Multi-GPU Detection** — Does the code use multiple GPUs at all? Look for explicit multi-GPU patterns across all relevant frameworks and methods:
+   - CUDA/NCCL: `torch.nn.DataParallel`, `DistributedDataParallel`, `nccl`, device enumeration (`cuda:0`, `cuda:1`, …), NVLink/NVSwitch topology hints
+   - MPI-based: `mpi4py`, `horovod`, `mpirun`/`srun` launcher scripts
+   - Python parallelism: `multiprocessing`, `concurrent.futures`, `joblib` with GPU workers, `Ray`, `Dask-CUDA`
+   - Other: `JAX` pmap/sharding, `TensorFlow MirroredStrategy`/`MultiWorkerMirroredStrategy`, `DeepSpeed`, `Megatron-LM`, `FSDP`
+
+2. **Effectiveness (if multi-GPU is already used)** — Evaluate how well the current implementation scales:
+   - Is work partitioned evenly across devices, or is one GPU the bottleneck?
+   - Are host-device transfers and inter-GPU communication (NCCL collectives, P2P copies) minimized and overlapped with compute?
+   - Is gradient synchronization efficient (gradient compression, bucketing, overlap with backward pass)?
+   - Are there unnecessary CPU synchronization points (`torch.cuda.synchronize()`, `.item()` inside loops) that serialize execution?
+   - Does the batch size, learning rate, or other hyperparameter scale with GPU count?
+
+3. **Parallelism Strategy Assessment** — For the workload type, is the chosen strategy the right one?
+   - Data parallelism (DDP) vs. model parallelism (tensor/pipeline) vs. fully sharded (FSDP/ZeRO) — is the choice appropriate for model size and memory constraints?
+   - Are there signs the model is too large for a single GPU but model parallelism is not used?
+
+4. **Recommendations (if multi-GPU is NOT used or is underused)** — Provide a concrete, prioritized roadmap:
+   - Easiest first step (e.g., wrap model in `DDP`, switch launcher to `torchrun`)
+   - Intermediate steps (e.g., add NCCL backend, tune `num_workers`, enable AMP)
+   - Advanced options for maximum scale (FSDP, DeepSpeed ZeRO-3, pipeline parallelism, NVLink topology-aware placement)
+   - Any code changes needed to make the workload GPU-count-agnostic (avoid hardcoded `cuda:0`, use `LOCAL_RANK` env var, etc.)
+
+For each finding include file names and line numbers. Rate each area (Effective / Needs Improvement / Not Implemented) and prioritize the highest-impact changes first.
