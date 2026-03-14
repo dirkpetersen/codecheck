@@ -208,6 +208,26 @@ body::before{
 }
 .results-wrapper.hidden{display:none}
 
+/* ── Terminal box ── */
+.term-card{
+  background:#07090d;
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  overflow:hidden;
+  height:360px;
+  margin-bottom:16px;
+  transition:height .5s cubic-bezier(.4,0,.2,1);
+}
+.term-card.shrunk{height:100px}
+.term-output{
+  height:100%;overflow-y:auto;
+  padding:14px 18px;margin:0;
+  font-family:var(--font-mono);font-size:.76rem;line-height:1.5;
+  color:#7d8fa3;white-space:pre-wrap;word-break:break-all;
+}
+.term-output::-webkit-scrollbar{width:4px}
+.term-output::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+
 .status-bar{
   display:flex;align-items:center;gap:8px;
   margin-bottom:16px;
@@ -297,15 +317,15 @@ body::before{
 /* ── Copy markdown button ── */
 .btn-copy{
   position:absolute;bottom:14px;right:16px;
-  display:none;align-items:center;gap:5px;
+  display:inline-flex;align-items:center;gap:5px;
   background:transparent;border:1px solid var(--border);
   color:var(--text-muted);font-family:var(--font-body);font-size:.75rem;
   padding:5px 11px;border-radius:var(--radius);cursor:pointer;
   transition:border-color .15s,color .15s,background .15s;
 }
-.btn-copy.visible{display:inline-flex}
 .btn-copy:hover{border-color:var(--border-bright);color:var(--text-primary);background:var(--bg-surface-raised)}
 .btn-copy svg{width:13px;height:13px;flex-shrink:0}
+.results-card.hidden{display:none}
 
 /* ── File issue button ── */
 .actions-bar{
@@ -426,7 +446,10 @@ body::before{
       <!-- Results -->
       <div class="results-wrapper hidden" id="resultsWrapper">
         <div class="status-bar" id="statusBar"></div>
-        <div class="results-card">
+        <div class="term-card" id="termCard">
+          <pre class="term-output" id="termOutput"></pre>
+        </div>
+        <div class="results-card hidden" id="reportCard">
           <div class="md-output" id="mdOutput"></div>
           <button class="btn-copy" id="copyBtn" onclick="copyMarkdown()" title="Copy raw markdown to clipboard">
             <svg viewBox="0 0 16 16" fill="none"><rect x="5" y="2" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 5v8.5A1.5 1.5 0 003.5 15H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
@@ -453,6 +476,7 @@ body::before{
 const history = [];
 let activeIdx = -1;
 let currentRaw = '';
+let currentChatter = '';
 let currentRepoUrl = '';
 let currentFiles = [];
 let ghAuthenticated = false;
@@ -528,19 +552,17 @@ async function startEvaluation(repoUrl, prompt) {
   evaluating = true;
   currentRepoUrl = repoUrl;
   currentRaw = '';
+  currentChatter = '';
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
 
-  const wrapper = document.getElementById('resultsWrapper');
-  wrapper.classList.remove('hidden');
-
-  const output = document.getElementById('mdOutput');
-  output.innerHTML = '<div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>';
-
-  const actionsBar = document.getElementById('actionsBar');
-  actionsBar.classList.add('hidden');
-  document.getElementById('copyBtn').classList.remove('visible');
+  document.getElementById('resultsWrapper').classList.remove('hidden');
+  document.getElementById('termOutput').textContent = '';
+  document.getElementById('termCard').classList.remove('shrunk');
+  document.getElementById('reportCard').classList.add('hidden');
+  document.getElementById('mdOutput').innerHTML = '';
+  document.getElementById('actionsBar').classList.add('hidden');
   currentFiles = [];
   const filesBar = document.getElementById('filesBar');
   filesBar.classList.add('hidden');
@@ -558,13 +580,10 @@ async function startEvaluation(repoUrl, prompt) {
     if (!res.ok) {
       const err = await res.json();
       setStatus('error', err.error || 'Request failed');
-      output.innerHTML = '';
       evaluating = false;
       btn.disabled = false;
       return;
     }
-
-    output.innerHTML = '';
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -601,26 +620,39 @@ async function startEvaluation(repoUrl, prompt) {
 }
 
 function handleSSE(event, data) {
-  const output = document.getElementById('mdOutput');
-
   switch (event) {
     case 'status':
       setStatus('loading', data);
       break;
 
-    case 'chunk':
-      currentRaw += data + '\n';
+    case 'chunk': {
+      currentChatter += data + '\n';
+      const term = document.getElementById('termOutput');
+      term.textContent = currentChatter;
+      term.scrollTop = term.scrollHeight;
+      break;
+    }
+
+    case 'report':
+      currentRaw = data;
+      document.getElementById('termCard').classList.add('shrunk');
+      document.getElementById('reportCard').classList.remove('hidden');
       renderMarkdown();
       break;
 
     case 'done':
       setStatus('done', 'Analysis complete');
-      renderMarkdown();
+      if (!currentRaw && currentChatter) {
+        // Bedrock path: streamed chunks are the final output
+        currentRaw = currentChatter;
+        document.getElementById('termCard').classList.add('shrunk');
+        document.getElementById('reportCard').classList.remove('hidden');
+        renderMarkdown();
+      }
       addToHistory(currentRepoUrl, currentRaw);
       if (ghAuthenticated) {
         document.getElementById('actionsBar').classList.remove('hidden');
       }
-      document.getElementById('copyBtn').classList.add('visible');
       break;
 
     case 'file': {

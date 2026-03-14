@@ -195,7 +195,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
                 elif etype == "result":
                     result_text = event.get("result", "")
                     if result_text and isinstance(result_text, str):
-                        yield _sse_event("chunk", result_text)
+                        yield _sse_event("report", result_text)
     except asyncio.TimeoutError:
         proc.kill()
         yield _sse_event("error", "Claude CLI timed out after 5 minutes.")
@@ -353,7 +353,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:
 .md strong{color:#fff}.md{font-size:1rem;line-height:1.8}
 </style></head><body>
 <div class="topbar"><strong>PLACEHOLDER_FILENAME</strong></div>
-<div class="wrap"><div class="md" id="out"></div></div>
+<div class="wrap"><div class="md" id="out"></div>
+<div style="display:flex;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+<button id="cpBtn" onclick="navigator.clipboard.writeText(md).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy markdown'},1500)})" style="display:inline-flex;align-items:center;gap:5px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--font);font-size:.75rem;padding:5px 14px;border-radius:var(--r);cursor:pointer">Copy markdown</button>
+</div></div>
 <script>
 const md=PLACEHOLDER_CONTENT_JSON;
 document.getElementById('out').innerHTML=marked.parse(md);
