@@ -156,6 +156,20 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
                             )
                             label = f"**[{tool}]** {detail}\n" if detail else f"**[{tool}]**\n"
                             yield _sse_event("chunk", label)
+                elif etype == "user":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") != "tool_result":
+                            continue
+                        raw = block.get("content", "") or block.get("output", "")
+                        if isinstance(raw, list):
+                            raw = "\n".join(
+                                b.get("text", "") for b in raw if b.get("type") == "text"
+                            )
+                        if raw and isinstance(raw, str):
+                            lines = raw.strip().splitlines()
+                            preview = lines[0][:160] if lines else ""
+                            suffix = f" _…({len(lines)} lines)_" if len(lines) > 1 else ""
+                            yield _sse_event("chunk", f"  ↳ {preview}{suffix}\n")
                 elif etype == "result":
                     result_text = event.get("result", "")
                     if result_text and isinstance(result_text, str):
