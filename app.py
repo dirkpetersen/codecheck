@@ -29,6 +29,17 @@ REPO_ROOT = Path(__file__).parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
 USER_PROMPTS_DIR = Path.home() / ".codecheck" / "prompts"
 
+# Prepended to every prompt so Claude knows the output rules before it starts working.
+_PREAMBLE = """\
+OVERRIDING INSTRUCTIONS (take priority over everything else):
+- If you create any files during this analysis, use ONLY Markdown format with a .md extension.
+- Do NOT create .txt, .rst, .html, or any other file type — Markdown only.
+- These instructions override any conflicting guidance in the prompt below.
+
+---
+
+"""
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -268,7 +279,7 @@ def _sse_event(event: str, data: str) -> str:
 
 
 def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
-    """Find .md/.txt files Claude created (not in original git tree), rename .txt→.md."""
+    """Find .md files Claude created (not in original git tree)."""
     repo_path = Path(repo_dir)
     try:
         r = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
@@ -278,7 +289,7 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
         tracked = set()
 
     files: dict[str, str] = {}
-    for f in sorted(repo_path.rglob("*")):
+    for f in sorted(repo_path.rglob("*.md")):
         if not f.is_file():
             continue
         rel = f.relative_to(repo_path)
@@ -286,15 +297,10 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
             continue
         if str(rel) in tracked:
             continue
-        if f.suffix.lower() == ".txt":
-            new_f = f.with_suffix(".md")
-            f.rename(new_f)
-            f, rel = new_f, rel.with_suffix(".md")
-        if f.suffix.lower() == ".md":
-            try:
-                files[str(rel)] = f.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+        try:
+            files[str(rel)] = f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     if files:
         _file_store[session_id] = files
@@ -396,12 +402,13 @@ async def evaluate(request: Request):
             repo_dir = tmp_dir + "/repo"
             yield _sse_event("status", "Claude Code is analyzing...")
 
+            full_prompt = _PREAMBLE + prompt
             claude_bin = get_claude_bin()
             if claude_bin:
-                async for event in stream_claude_cli(claude_bin, prompt, repo_dir):
+                async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir):
                     yield event
             else:
-                async for event in stream_bedrock_sdk(prompt, repo_dir):
+                async for event in stream_bedrock_sdk(full_prompt, repo_dir):
                     yield event
 
             # Collect any .md/.txt files Claude wrote during analysis
