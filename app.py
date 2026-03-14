@@ -140,11 +140,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
                 except json.JSONDecodeError:
                     continue
                 etype = event.get("type")
-                if etype == "assistant":
-                    for block in event.get("message", {}).get("content", []):
-                        if block.get("type") == "text" and block.get("text"):
-                            yield _sse_event("chunk", block["text"])
-                elif etype == "result":
+                if etype == "result":
                     result_text = event.get("result", "")
                     if result_text and isinstance(result_text, str):
                         yield _sse_event("chunk", result_text)
