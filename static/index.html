@@ -480,9 +480,12 @@ let currentRaw = '';
 let currentChatter = '';
 let currentRepoUrl = '';
 let currentFiles = [];
+let currentSessionId = '';
 let ghAuthenticated = false;
 let evaluating = false;
 let eventSource = null;
+const EVAL_LABEL = '<svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg> Evaluate Now';
+const FOLLOWUP_LABEL = '<svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg> Ask Additional Questions';
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
@@ -502,6 +505,7 @@ document.addEventListener('DOMContentLoaded', () => {
     breaks: false,
     gfm: true,
   });
+  document.getElementById('repoUrl').addEventListener('input', resetToEvalMode);
 });
 
 async function loadPrompts() {
@@ -521,6 +525,7 @@ async function loadPrompts() {
       const opt = sel.options[sel.selectedIndex];
       if (opt.dataset.body) {
         document.getElementById('promptText').value = opt.dataset.body;
+        resetToEvalMode();
       }
     });
   } catch (e) {
@@ -542,12 +547,27 @@ function handleSubmit(e) {
   e.preventDefault();
   if (evaluating) return false;
 
-  const repoUrl = document.getElementById('repoUrl').value.trim();
   const prompt = document.getElementById('promptText').value.trim();
-  if (!repoUrl || !prompt) return false;
 
-  startEvaluation(repoUrl, prompt);
+  if (currentSessionId) {
+    // Follow-up mode
+    if (!prompt) {
+      alert('Please type a follow-up question in the prompt box.');
+      return false;
+    }
+    startFollowup(currentSessionId, prompt);
+  } else {
+    // New evaluation
+    const repoUrl = document.getElementById('repoUrl').value.trim();
+    if (!repoUrl || !prompt) return false;
+    startEvaluation(repoUrl, prompt);
+  }
   return false;
+}
+
+function resetToEvalMode() {
+  currentSessionId = '';
+  document.getElementById('submitBtn').innerHTML = EVAL_LABEL;
 }
 
 async function startEvaluation(repoUrl, prompt) {
@@ -555,6 +575,7 @@ async function startEvaluation(repoUrl, prompt) {
   currentRepoUrl = repoUrl;
   currentRaw = '';
   currentChatter = '';
+  currentSessionId = '';
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -621,8 +642,76 @@ async function startEvaluation(repoUrl, prompt) {
   btn.disabled = false;
 }
 
+async function startFollowup(sessionId, prompt) {
+  evaluating = true;
+  currentRaw = '';
+  currentChatter = '';
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+
+  // Show terminal, keep report visible below
+  document.getElementById('termCard').classList.remove('shrunk', 'hidden');
+  document.getElementById('termOutput').textContent = '';
+
+  setStatus('loading', 'Continuing analysis...');
+
+  try {
+    const res = await fetch('/api/followup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, prompt }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      setStatus('error', err.error || 'Request failed');
+      evaluating = false;
+      btn.disabled = false;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      let eventType = null;
+      let dataLines = [];
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+          dataLines = [];
+        } else if (line.startsWith('data: ')) {
+          dataLines.push(line.slice(6));
+        } else if (line === '' && eventType) {
+          handleSSE(eventType, dataLines.join('\n'));
+          eventType = null;
+          dataLines = [];
+        }
+      }
+    }
+  } catch (e) {
+    setStatus('error', 'Connection lost: ' + e.message);
+  }
+
+  evaluating = false;
+  btn.disabled = false;
+}
+
 function handleSSE(event, data) {
   switch (event) {
+    case 'session_id':
+      currentSessionId = data;
+      break;
+
     case 'status':
       setStatus('loading', data);
       break;
@@ -655,6 +744,9 @@ function handleSSE(event, data) {
       if (ghAuthenticated) {
         document.getElementById('actionsBar').classList.remove('hidden');
       }
+      // Switch to follow-up mode
+      document.getElementById('promptText').value = '';
+      document.getElementById('submitBtn').innerHTML = FOLLOWUP_LABEL;
       break;
 
     case 'file': {

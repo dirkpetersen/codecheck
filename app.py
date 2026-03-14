@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -24,6 +25,20 @@ app = FastAPI(title="codecheck")
 
 # In-memory store of files Claude created during analysis: session_id -> {rel_path -> content}
 _file_store: dict[str, dict[str, str]] = {}
+
+# Active sessions kept alive for follow-up questions: session_id -> {tmp_dir, repo_dir, created}
+_sessions: dict[str, dict] = {}
+
+
+def _cleanup_sessions(max_age_secs: int = 7200):
+    """Remove sessions older than max_age_secs (default 2 hours)."""
+    now = time.time()
+    expired = [sid for sid, s in _sessions.items() if now - s.get("created", 0) > max_age_secs]
+    for sid in expired:
+        tmp = _sessions.pop(sid, {}).get("tmp_dir")
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+        _file_store.pop(sid, None)
 
 REPO_ROOT = Path(__file__).parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -131,9 +146,12 @@ def check_gh_auth() -> bool:
         return False
 
 
-async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str):
+async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
+                            continue_conversation: bool = False):
     """Run claude CLI in batch mode, streaming output via stream-json format."""
     cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+    if continue_conversation:
+        cmd.insert(1, "--continue")
     # Claude CLI requires both ~/bin and ~/.local/bin in PATH on startup
     env = os.environ.copy()
     home = Path.home()
@@ -292,7 +310,7 @@ def _sse_event(event: str, data: str) -> str:
 
 
 def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
-    """Find .md files Claude created (not in original git tree)."""
+    """Find new .md files Claude created (not in original git tree, not already known)."""
     repo_path = Path(repo_dir)
     try:
         r = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
@@ -301,23 +319,27 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
     except Exception:
         tracked = set()
 
-    files: dict[str, str] = {}
+    already_known = set(_file_store.get(session_id, {}).keys())
+
+    new_files: dict[str, str] = {}
     for f in sorted(repo_path.rglob("*.md")):
         if not f.is_file():
             continue
         rel = f.relative_to(repo_path)
         if ".git" in rel.parts:
             continue
-        if str(rel) in tracked:
+        rel_str = str(rel)
+        if rel_str in tracked or rel_str in already_known:
             continue
         try:
-            files[str(rel)] = f.read_text(encoding="utf-8", errors="replace")
+            new_files[rel_str] = f.read_text(encoding="utf-8", errors="replace")
         except Exception:
             pass
 
-    if files:
-        _file_store[session_id] = files
-    return files
+    if new_files:
+        store = _file_store.setdefault(session_id, {})
+        store.update(new_files)
+    return new_files
 
 
 _FILE_VIEWER = """\
@@ -402,10 +424,14 @@ async def evaluate(request: Request):
         return JSONResponse({"error": "repo_url and prompt are required"}, status_code=400)
 
     async def generate():
-        yield _sse_event("status", "Cloning repository...")
+        _cleanup_sessions()
 
         session_id = str(uuid.uuid4())
+        yield _sse_event("session_id", session_id)
+        yield _sse_event("status", "Cloning repository...")
+
         tmp_dir = tempfile.mkdtemp(prefix="codecheck_")
+        keep_session = False
         try:
             # Clone the repo
             proc = await asyncio.create_subprocess_exec(
@@ -432,14 +458,58 @@ async def evaluate(request: Request):
                 async for event in stream_bedrock_sdk(full_prompt, repo_dir):
                     yield event
 
-            # Collect any .md/.txt files Claude wrote during analysis
+            # Collect any .md files Claude wrote during analysis
             output_files = _collect_output_files(repo_dir, session_id)
             for fname in sorted(output_files):
                 url = f"/api/files/{session_id}/{fname}"
                 yield _sse_event("file", json.dumps({"name": fname, "url": url}))
 
+            # Keep session alive for follow-up questions
+            _sessions[session_id] = {
+                "tmp_dir": tmp_dir, "repo_dir": repo_dir, "created": time.time(),
+            }
+            keep_session = True
+
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            if not keep_session:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/followup")
+async def followup(request: Request):
+    """Ask follow-up questions using the same Claude session and repo."""
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    prompt = body.get("prompt", "").strip()
+
+    if not session_id or not prompt:
+        return JSONResponse({"error": "session_id and prompt are required"}, status_code=400)
+
+    session = _sessions.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session expired — please run a new evaluation"}, status_code=404)
+
+    async def generate():
+        repo_dir = session["repo_dir"]
+        yield _sse_event("status", "Continuing analysis...")
+
+        full_prompt = _PREAMBLE + prompt
+        claude_bin = get_claude_bin()
+        if claude_bin:
+            async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir,
+                                                 continue_conversation=True):
+                yield event
+        else:
+            async for event in stream_bedrock_sdk(full_prompt, repo_dir):
+                yield event
+
+        # Collect any new .md files from this follow-up
+        output_files = _collect_output_files(repo_dir, session_id)
+        for fname in sorted(output_files):
+            url = f"/api/files/{session_id}/{fname}"
+            yield _sse_event("file", json.dumps({"name": fname, "url": url}))
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
