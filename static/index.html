@@ -487,6 +487,7 @@ let eventSource = null;
 document.addEventListener('DOMContentLoaded', () => {
   loadPrompts();
   checkGhAuth();
+  loadHistory();
   fetch('/api/version').then(r => r.json()).then(d => {
     if (d.commit) document.getElementById('commitBadge').textContent = d.commit;
   }).catch(() => {});
@@ -692,11 +693,37 @@ function setStatus(type, text) {
 }
 
 // ── History ──
+const HISTORY_KEY = 'codecheck_history';
+const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+
+function loadHistory() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    const cutoff = Date.now() - THIRTY_DAYS;
+    const fresh = stored.filter(e => e.timestamp && e.timestamp > cutoff);
+    history.push(...fresh);
+  } catch(e) {}
+  renderHistory();
+}
+
+function saveHistory() {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch(e) {
+    // Storage full — keep the 20 most recent and retry
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 20)));
+    } catch(e2) {}
+  }
+}
+
 function addToHistory(repoUrl, raw) {
   const name = repoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  history.unshift({ name, time, raw, repoUrl });
+  const now = Date.now();
+  const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  history.unshift({ name, time, timestamp: now, raw, repoUrl });
   activeIdx = 0;
+  saveHistory();
   renderHistory();
 }
 
@@ -706,12 +733,20 @@ function renderHistory() {
     list.innerHTML = '<div class="sidebar-empty">No evaluations yet.<br>Results will appear here.</div>';
     return;
   }
-  list.innerHTML = history.map((h, i) => `
+  const today = new Date().toDateString();
+  list.innerHTML = history.map((h, i) => {
+    const d = h.timestamp ? new Date(h.timestamp) : null;
+    const label = d
+      ? (d.toDateString() === today
+          ? h.time
+          : d.toLocaleDateString([], { month: 'short', day: 'numeric' }))
+      : h.time;
+    return `
     <div class="history-item ${i === activeIdx ? 'active' : ''}" onclick="restoreHistory(${i})">
       <div class="repo-name">${escHtml(h.name)}</div>
-      <div class="timestamp">${escHtml(h.time)}</div>
-    </div>
-  `).join('');
+      <div class="timestamp">${escHtml(label)}</div>
+    </div>`;
+  }).join('');
 }
 
 function restoreHistory(idx) {
@@ -722,6 +757,9 @@ function restoreHistory(idx) {
   currentRepoUrl = entry.repoUrl;
 
   document.getElementById('resultsWrapper').classList.remove('hidden');
+  document.getElementById('termCard').classList.add('shrunk');
+  document.getElementById('termOutput').textContent = '';
+  document.getElementById('reportCard').classList.remove('hidden');
   setStatus('done', 'Analysis complete');
   renderMarkdown();
   renderHistory();
