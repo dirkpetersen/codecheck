@@ -40,7 +40,13 @@ except Exception:
 _PREAMBLE = """\
 OVERRIDING INSTRUCTIONS (take priority over everything else):
 - If you create any files during this analysis, use ONLY Markdown format with a .md extension.
-- Do NOT create .txt, .rst, .html, or any other file type — Markdown only.
+  Do NOT create .txt, .rst, .html, or any other file type — Markdown only.
+- Be thoughtful about when to create additional files vs. keeping everything in your main report:
+  - If the analysis is short or produces only one supplementary document, fold it into the main
+    report rather than creating a separate file.
+  - Create separate .md files only when the analysis is detailed and there are multiple distinct
+    documents (e.g. per-component reports, code examples, migration guides) that would make the
+    main report unwieldy.
 - These instructions override any conflicting guidance in the prompt below.
 
 ---

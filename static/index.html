@@ -669,6 +669,11 @@ function handleSSE(event, data) {
       chip.rel = 'noopener';
       chip.textContent = f.name;
       bar.appendChild(chip);
+      // Update the latest history entry (file events arrive after done)
+      if (history.length > 0 && activeIdx === 0) {
+        history[0].files = [...currentFiles];
+        saveHistory();
+      }
       break;
     }
 
