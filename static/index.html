@@ -219,6 +219,7 @@ body::before{
   transition:height .5s cubic-bezier(.4,0,.2,1);
 }
 .term-card.shrunk{height:100px}
+.term-card.hidden{display:none}
 .term-output{
   height:100%;overflow-y:auto;
   padding:14px 18px;margin:0;
@@ -560,7 +561,7 @@ async function startEvaluation(repoUrl, prompt) {
 
   document.getElementById('resultsWrapper').classList.remove('hidden');
   document.getElementById('termOutput').textContent = '';
-  document.getElementById('termCard').classList.remove('shrunk');
+  document.getElementById('termCard').classList.remove('shrunk', 'hidden');
   document.getElementById('reportCard').classList.add('hidden');
   document.getElementById('mdOutput').innerHTML = '';
   document.getElementById('actionsBar').classList.add('hidden');
@@ -721,7 +722,7 @@ function addToHistory(repoUrl, raw) {
   const name = repoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
   const now = Date.now();
   const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  history.unshift({ name, time, timestamp: now, raw, repoUrl });
+  history.unshift({ name, time, timestamp: now, raw, repoUrl, files: [...currentFiles] });
   activeIdx = 0;
   saveHistory();
   renderHistory();
@@ -757,12 +758,30 @@ function restoreHistory(idx) {
   currentRepoUrl = entry.repoUrl;
 
   document.getElementById('resultsWrapper').classList.remove('hidden');
-  document.getElementById('termCard').classList.add('shrunk');
-  document.getElementById('termOutput').textContent = '';
+  document.getElementById('termCard').classList.add('hidden');
   document.getElementById('reportCard').classList.remove('hidden');
   setStatus('done', 'Analysis complete');
   renderMarkdown();
   renderHistory();
+
+  // Restore file chips
+  currentFiles = entry.files || [];
+  const filesBar = document.getElementById('filesBar');
+  filesBar.innerHTML = '<span class="files-label">Files</span>';
+  if (currentFiles.length) {
+    filesBar.classList.remove('hidden');
+    currentFiles.forEach(f => {
+      const chip = document.createElement('a');
+      chip.className = 'file-chip';
+      chip.href = f.url;
+      chip.target = '_blank';
+      chip.rel = 'noopener';
+      chip.textContent = f.name;
+      filesBar.appendChild(chip);
+    });
+  } else {
+    filesBar.classList.add('hidden');
+  }
 
   if (ghAuthenticated) {
     document.getElementById('actionsBar').classList.remove('hidden');
