@@ -29,6 +29,13 @@ REPO_ROOT = Path(__file__).parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
 USER_PROMPTS_DIR = Path.home() / ".codecheck" / "prompts"
 
+try:
+    _GIT_COMMIT = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
+    ).strip()
+except Exception:
+    _GIT_COMMIT = ""
+
 # Prepended to every prompt so Claude knows the output rules before it starts working.
 _PREAMBLE = """\
 OVERRIDING INSTRUCTIONS (take priority over everything else):
@@ -357,6 +364,11 @@ document.querySelectorAll('pre code:not(.hljs)').forEach(el=>hljs.highlightEleme
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.get("/api/version")
+async def get_version():
+    return JSONResponse({"commit": _GIT_COMMIT})
+
 
 @app.get("/api/prompts")
 async def get_prompts():

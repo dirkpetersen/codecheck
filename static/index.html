@@ -379,7 +379,7 @@ body::before{
       </button>
       <div class="logo">
         <h1>codecheck</h1>
-        <span>Code review powered by Claude</span>
+        <span>Code review powered by Claude <span id="commitBadge" style="font-family:var(--font-mono);font-size:.65rem;opacity:.55"></span></span>
       </div>
     </div>
 
@@ -446,6 +446,9 @@ let eventSource = null;
 document.addEventListener('DOMContentLoaded', () => {
   loadPrompts();
   checkGhAuth();
+  fetch('/api/version').then(r => r.json()).then(d => {
+    if (d.commit) document.getElementById('commitBadge').textContent = d.commit;
+  }).catch(() => {});
   marked.setOptions({
     highlight: (code, lang) => {
       if (lang && hljs.getLanguage(lang)) {
