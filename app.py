@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 try:
@@ -20,6 +21,9 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="codecheck")
+
+# In-memory store of files Claude created during analysis: session_id -> {rel_path -> content}
+_file_store: dict[str, dict[str, str]] = {}
 
 REPO_ROOT = Path(__file__).parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -263,6 +267,87 @@ def _sse_event(event: str, data: str) -> str:
     return f"event: {event}\ndata: {escaped}\n\n"
 
 
+def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
+    """Find .md/.txt files Claude created (not in original git tree), rename .txt→.md."""
+    repo_path = Path(repo_dir)
+    try:
+        r = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                           cwd=repo_dir, timeout=10)
+        tracked = set(r.stdout.strip().splitlines()) if r.returncode == 0 else set()
+    except Exception:
+        tracked = set()
+
+    files: dict[str, str] = {}
+    for f in sorted(repo_path.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(repo_path)
+        if ".git" in rel.parts:
+            continue
+        if str(rel) in tracked:
+            continue
+        if f.suffix.lower() == ".txt":
+            new_f = f.with_suffix(".md")
+            f.rename(new_f)
+            f, rel = new_f, rel.with_suffix(".md")
+        if f.suffix.lower() == ".md":
+            try:
+                files[str(rel)] = f.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+    if files:
+        _file_store[session_id] = files
+    return files
+
+
+_FILE_VIEWER = """\
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>PLACEHOLDER_FILENAME</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d1117;--surface:#161b22;--inset:#0d1117;--border:#30363d;
+  --text:#e6edf3;--muted:#8b949e;--accent:#E8520A;
+  --font:'DM Sans',system-ui,sans-serif;--mono:'JetBrains Mono',monospace;--r:8px}
+html{font-size:15px;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.6}
+.topbar{padding:14px 32px;border-bottom:1px solid var(--border);background:var(--surface);
+  font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+.topbar strong{color:var(--text)}
+.wrap{max-width:860px;margin:0 auto;padding:40px 32px 80px}
+.md h1,.md h2,.md h3,.md h4{margin-top:1.4em;margin-bottom:.5em;font-weight:600;
+  border-bottom:1px solid var(--border);padding-bottom:6px}
+.md h1{font-size:1.5rem;border:none}.md h2{font-size:1.2rem}
+.md h3{font-size:1.05rem;border:none}.md h4{font-size:.95rem;border:none}
+.md p{margin:.6em 0}.md ul,.md ol{margin:.6em 0;padding-left:1.6em}.md li{margin:.25em 0}
+.md code{font-family:var(--mono);font-size:.82em;background:rgba(110,118,129,.15);
+  padding:2px 6px;border-radius:4px;color:#c9d1d9}
+.md pre{margin:.8em 0;border-radius:var(--r);border:1px solid var(--border);overflow-x:auto}
+.md pre code{display:block;padding:16px;background:var(--inset);font-size:.8rem;
+  line-height:1.55;border-radius:0}
+.md blockquote{border-left:3px solid var(--accent);padding:.4em 1em;margin:.8em 0;
+  color:var(--muted);background:rgba(232,82,10,.06);border-radius:0 var(--r) var(--r) 0}
+.md table{border-collapse:collapse;width:100%;margin:.8em 0;font-size:.85rem}
+.md th,.md td{border:1px solid var(--border);padding:8px 12px;text-align:left}
+.md th{background:#1c2129;font-weight:600}
+.md a{color:var(--accent);text-decoration:none}.md a:hover{text-decoration:underline}
+.md hr{border:none;border-top:1px solid var(--border);margin:1.5em 0}
+.md strong{color:#fff}.md{font-size:1rem;line-height:1.8}
+</style></head><body>
+<div class="topbar"><strong>PLACEHOLDER_FILENAME</strong></div>
+<div class="wrap"><div class="md" id="out"></div></div>
+<script>
+const md=PLACEHOLDER_CONTENT_JSON;
+document.getElementById('out').innerHTML=marked.parse(md);
+document.querySelectorAll('pre code:not(.hljs)').forEach(el=>hljs.highlightElement(el));
+</script></body></html>"""
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -292,6 +377,7 @@ async def evaluate(request: Request):
     async def generate():
         yield _sse_event("status", "Cloning repository...")
 
+        session_id = str(uuid.uuid4())
         tmp_dir = tempfile.mkdtemp(prefix="codecheck_")
         try:
             # Clone the repo
@@ -317,6 +403,12 @@ async def evaluate(request: Request):
             else:
                 async for event in stream_bedrock_sdk(prompt, repo_dir):
                     yield event
+
+            # Collect any .md/.txt files Claude wrote during analysis
+            output_files = _collect_output_files(repo_dir, session_id)
+            for fname in sorted(output_files):
+                url = f"/api/files/{session_id}/{fname}"
+                yield _sse_event("file", json.dumps({"name": fname, "url": url}))
 
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -359,6 +451,18 @@ async def file_issue(request: Request):
             return JSONResponse({"error": result.stderr.strip()}, status_code=500)
     except subprocess.TimeoutExpired:
         return JSONResponse({"error": "gh issue create timed out"}, status_code=500)
+
+
+@app.get("/api/files/{session_id}/{filename:path}", response_class=HTMLResponse)
+async def get_file(session_id: str, filename: str):
+    """Serve a Claude-created markdown file as a rendered HTML page."""
+    content = _file_store.get(session_id, {}).get(filename)
+    if content is None:
+        return HTMLResponse("<h2>File not found or session expired.</h2>", status_code=404)
+    html = (_FILE_VIEWER
+            .replace("PLACEHOLDER_FILENAME", filename)
+            .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
+    return HTMLResponse(html)
 
 
 @app.get("/", response_class=HTMLResponse)

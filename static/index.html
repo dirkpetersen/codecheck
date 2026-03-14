@@ -299,6 +299,21 @@ body::before{
   margin-top:16px;display:flex;gap:10px;align-items:center;
 }
 .actions-bar.hidden{display:none}
+
+/* ── Created files bar ── */
+.files-bar{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.files-bar.hidden{display:none}
+.files-label{font-size:.72rem;color:var(--text-muted);font-weight:600;
+  letter-spacing:.04em;text-transform:uppercase;margin-right:2px}
+.file-chip{
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--bg-surface-raised);
+  border:1px solid var(--border);border-radius:20px;
+  color:var(--accent);font-family:var(--font-mono);font-size:.72rem;
+  padding:4px 12px;text-decoration:none;
+  transition:border-color .15s,background .15s;
+}
+.file-chip:hover{border-color:var(--accent);background:var(--accent-glow)}
 .btn-issue{
   display:inline-flex;align-items:center;gap:6px;
   background:transparent;
@@ -408,6 +423,9 @@ body::before{
           </button>
           <span class="issue-status" id="issueStatus"></span>
         </div>
+        <div class="files-bar hidden" id="filesBar">
+          <span class="files-label">Files</span>
+        </div>
       </div>
     </div>
   </div>
@@ -419,6 +437,7 @@ const history = [];
 let activeIdx = -1;
 let currentRaw = '';
 let currentRepoUrl = '';
+let currentFiles = [];
 let ghAuthenticated = false;
 let evaluating = false;
 let eventSource = null;
@@ -501,6 +520,10 @@ async function startEvaluation(repoUrl, prompt) {
 
   const actionsBar = document.getElementById('actionsBar');
   actionsBar.classList.add('hidden');
+  currentFiles = [];
+  const filesBar = document.getElementById('filesBar');
+  filesBar.classList.add('hidden');
+  filesBar.innerHTML = '<span class="files-label">Files</span>';
 
   setStatus('loading', 'Connecting...');
 
@@ -577,6 +600,21 @@ function handleSSE(event, data) {
         document.getElementById('actionsBar').classList.remove('hidden');
       }
       break;
+
+    case 'file': {
+      const f = JSON.parse(data);
+      currentFiles.push(f);
+      const bar = document.getElementById('filesBar');
+      bar.classList.remove('hidden');
+      const chip = document.createElement('a');
+      chip.className = 'file-chip';
+      chip.href = f.url;
+      chip.target = '_blank';
+      chip.rel = 'noopener';
+      chip.textContent = f.name;
+      bar.appendChild(chip);
+      break;
+    }
 
     case 'error':
       setStatus('error', data);
