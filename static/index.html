@@ -487,6 +487,49 @@ let eventSource = null;
 const EVAL_LABEL = '<svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg> Evaluate Now';
 const FOLLOWUP_LABEL = '<svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg> Ask Additional Questions';
 
+function openFileContent(content, name) {
+  const escaped = name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${escaped}</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
+<style>*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d1117;--surface:#161b22;--inset:#0d1117;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#E8520A;--font:'DM Sans',system-ui,sans-serif;--mono:'JetBrains Mono',monospace;--r:8px}
+html{font-size:15px;-webkit-font-smoothing:antialiased}body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.6}
+.topbar{padding:14px 32px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--mono);font-size:.82rem;color:var(--muted)}.topbar strong{color:var(--text)}
+.wrap{max-width:860px;margin:0 auto;padding:40px 32px 80px}
+.md h1,.md h2,.md h3,.md h4{margin-top:1.4em;margin-bottom:.5em;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:6px}
+.md h1{font-size:1.5rem;border:none}.md h2{font-size:1.2rem}.md h3{font-size:1.05rem;border:none}.md h4{font-size:.95rem;border:none}
+.md p{margin:.6em 0}.md ul,.md ol{margin:.6em 0;padding-left:1.6em}.md li{margin:.25em 0}
+.md code{font-family:var(--mono);font-size:.82em;background:rgba(110,118,129,.15);padding:2px 6px;border-radius:4px;color:#c9d1d9}
+.md pre{margin:.8em 0;border-radius:var(--r);border:1px solid var(--border);overflow-x:auto}
+.md pre code{display:block;padding:16px;background:var(--inset);font-size:.8rem;line-height:1.55;border-radius:0}
+.md blockquote{border-left:3px solid var(--accent);padding:.4em 1em;margin:.8em 0;color:var(--muted);background:rgba(232,82,10,.06);border-radius:0 var(--r) var(--r) 0}
+.md table{border-collapse:collapse;width:100%;margin:.8em 0;font-size:.85rem}.md th,.md td{border:1px solid var(--border);padding:8px 12px;text-align:left}.md th{background:#1c2129;font-weight:600}
+.md a{color:var(--accent);text-decoration:none}.md a:hover{text-decoration:underline}
+.md hr{border:none;border-top:1px solid var(--border);margin:1.5em 0}.md strong{color:#fff}.md{font-size:1rem;line-height:1.8}
+</style></head><body>
+<div class="topbar"><strong>${escaped}</strong></div>
+<div class="wrap"><div class="md" id="out"></div>
+<div style="display:flex;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+<button onclick="navigator.clipboard.writeText(md).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy markdown'},1500)})" style="display:inline-flex;align-items:center;gap:5px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:inherit;font-size:.75rem;padding:5px 14px;border-radius:8px;cursor:pointer">Copy markdown</button>
+</div></div>
+<script>const md=${JSON.stringify(content)};document.getElementById('out').innerHTML=marked.parse(md);document.querySelectorAll('pre code:not(.hljs)').forEach(el=>hljs.highlightElement(el));<\/script>
+</body></html>`;
+  const w = window.open('', '_blank');
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
+function makeFileChip(f) {
+  const chip = document.createElement('a');
+  chip.className = 'file-chip';
+  chip.href = 'javascript:void(0)';
+  chip.textContent = f.name;
+  chip.addEventListener('click', () => openFileContent(f.content || '', f.name));
+  return chip;
+}
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
   loadPrompts();
@@ -754,12 +797,7 @@ function handleSSE(event, data) {
       currentFiles.push(f);
       const bar = document.getElementById('filesBar');
       bar.classList.remove('hidden');
-      const chip = document.createElement('a');
-      chip.className = 'file-chip';
-      chip.href = f.url;
-      chip.target = '_blank';
-      chip.rel = 'noopener';
-      chip.textContent = f.name;
+      const chip = makeFileChip(f);
       bar.appendChild(chip);
       // Update the latest history entry (file events arrive after done)
       if (history.length > 0 && activeIdx === 0) {
@@ -868,13 +906,7 @@ function restoreHistory(idx) {
   if (currentFiles.length) {
     filesBar.classList.remove('hidden');
     currentFiles.forEach(f => {
-      const chip = document.createElement('a');
-      chip.className = 'file-chip';
-      chip.href = f.url;
-      chip.target = '_blank';
-      chip.rel = 'noopener';
-      chip.textContent = f.name;
-      filesBar.appendChild(chip);
+      filesBar.appendChild(makeFileChip(f));
     });
   } else {
     filesBar.classList.add('hidden');

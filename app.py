@@ -462,7 +462,7 @@ async def evaluate(request: Request):
             output_files = _collect_output_files(repo_dir, session_id)
             for fname in sorted(output_files):
                 url = f"/api/files/{session_id}/{fname}"
-                yield _sse_event("file", json.dumps({"name": fname, "url": url}))
+                yield _sse_event("file", json.dumps({"name": fname, "url": url, "content": output_files[fname]}))
 
             # Keep session alive for follow-up questions
             _sessions[session_id] = {
@@ -509,7 +509,7 @@ async def followup(request: Request):
         output_files = _collect_output_files(repo_dir, session_id)
         for fname in sorted(output_files):
             url = f"/api/files/{session_id}/{fname}"
-            yield _sse_event("file", json.dumps({"name": fname, "url": url}))
+            yield _sse_event("file", json.dumps({"name": fname, "url": url, "content": output_files[fname]}))
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
