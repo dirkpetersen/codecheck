@@ -488,6 +488,7 @@ let currentChatter = '';
 let currentRepoUrl = '';
 let currentFiles = [];
 let currentSessionId = '';
+let savedRaw = '';  // previous report preserved across follow-ups
 let ghAuthenticated = false;
 let evaluating = false;
 let eventSource = null;
@@ -649,6 +650,7 @@ async function startEvaluation(repoUrl, prompt) {
   currentRaw = '';
   currentChatter = '';
   currentSessionId = '';
+  savedRaw = '';
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -717,6 +719,7 @@ async function startEvaluation(repoUrl, prompt) {
 
 async function startFollowup(sessionId, prompt) {
   evaluating = true;
+  savedRaw = currentRaw;  // preserve previous report
   currentRaw = '';
   currentChatter = '';
 
@@ -798,7 +801,12 @@ function handleSSE(event, data) {
     }
 
     case 'report':
-      currentRaw = data;
+      if (savedRaw) {
+        currentRaw = savedRaw + '\n\n---\n\n## Follow-up\n\n' + data;
+        savedRaw = '';
+      } else {
+        currentRaw = data;
+      }
       document.getElementById('termCard').classList.add('shrunk');
       document.getElementById('reportCard').classList.remove('hidden');
       renderMarkdown();
@@ -808,7 +816,12 @@ function handleSSE(event, data) {
       setStatus('done', 'Analysis complete');
       if (!currentRaw && currentChatter) {
         // Bedrock path: streamed chunks are the final output
-        currentRaw = currentChatter;
+        if (savedRaw) {
+          currentRaw = savedRaw + '\n\n---\n\n## Follow-up\n\n' + currentChatter;
+          savedRaw = '';
+        } else {
+          currentRaw = currentChatter;
+        }
         document.getElementById('termCard').classList.add('shrunk');
         document.getElementById('reportCard').classList.remove('hidden');
         renderMarkdown();
