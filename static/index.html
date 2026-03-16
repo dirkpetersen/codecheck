@@ -952,11 +952,11 @@ function renderHistory() {
       : h.time;
     return `
     <div class="history-item ${i === activeIdx ? 'active' : ''}" onclick="restoreHistory(${i})">
-      <div class="repo-name">${escHtml(h.name)}</div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <span class="timestamp">${escHtml(label)}</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
+        <div class="repo-name">${escHtml(h.name)}</div>
         <span class="history-delete" onclick="deleteHistory(${i}, event)" title="Remove from history">&times;</span>
       </div>
+      <div class="timestamp">${escHtml(label)}</div>
     </div>`;
   }).join('');
   list.innerHTML = html;
