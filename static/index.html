@@ -99,6 +99,12 @@ body::before{
 .history-item .timestamp{
   font-size:.7rem;color:var(--text-muted);margin-top:2px;
 }
+.history-delete{
+  font-size:1rem;color:var(--text-muted);cursor:pointer;line-height:1;
+  opacity:0;transition:opacity .15s,color .15s;padding:0 2px;
+}
+.history-item:hover .history-delete{opacity:1}
+.history-delete:hover{color:var(--accent)}
 .sidebar-empty{
   padding:24px 16px;text-align:center;
   color:var(--text-muted);font-size:.8rem;
@@ -337,6 +343,7 @@ body::before{
 /* ── Created files bar ── */
 .files-bar{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .files-bar.hidden{display:none}
+.form-row.hidden{display:none}
 .files-label{font-size:.72rem;color:var(--text-muted);font-weight:600;
   letter-spacing:.04em;text-transform:uppercase;margin-right:2px}
 .file-chip{
@@ -421,9 +428,9 @@ body::before{
       <!-- Form -->
       <div class="form-card">
         <form id="evalForm" onsubmit="return handleSubmit(event)">
-          <div class="form-row">
+          <div class="form-row" id="repoUrlRow">
             <label class="form-label" for="repoUrl">Repository</label>
-            <input class="form-input" type="text" id="repoUrl" placeholder="user/repo  or  https://github.com/user/repo" required autocomplete="off" spellcheck="false">
+            <input class="form-input" type="text" id="repoUrl" placeholder="user/repo  or  https://github.com/user/repo" autocomplete="off" spellcheck="false">
           </div>
           <div class="form-row">
             <label class="form-label" for="promptSelect">Prompt Template <span style="font-weight:400;font-size:.72rem;color:var(--text-muted);margin-left:6px">templates [<a href="https://github.com/dirkpetersen/codecheck/tree/main/prompts" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none" title="Browse the built-in prompt template files on GitHub (read-only)">view</a>] [<a href="https://github.com/dirkpetersen/codecheck/fork" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none" title="Fork this repo to your own GitHub account, then add or edit .prmpt files in the prompts/ folder. The first line of each file is the template name. Open a pull request when you're done to share your templates.">fork/edit</a>]</span></label>
@@ -591,18 +598,22 @@ function handleSubmit(e) {
   if (evaluating) return false;
 
   const prompt = document.getElementById('promptText').value.trim();
+  if (!prompt) {
+    alert('Please enter a prompt.');
+    return false;
+  }
 
   if (currentSessionId) {
-    // Follow-up mode
-    if (!prompt) {
-      alert('Please type a follow-up question in the prompt box.');
-      return false;
-    }
+    // Follow-up on an active session
     startFollowup(currentSessionId, prompt);
   } else {
-    // New evaluation
-    const repoUrl = document.getElementById('repoUrl').value.trim();
-    if (!repoUrl || !prompt) return false;
+    // New evaluation — use visible input or stored repoUrl from history
+    const repoUrl = document.getElementById('repoUrl').value.trim() || currentRepoUrl;
+    if (!repoUrl) {
+      alert('Please enter a repository URL.');
+      return false;
+    }
+    document.getElementById('repoUrlRow').classList.remove('hidden');
     startEvaluation(repoUrl, prompt);
   }
   return false;
@@ -611,6 +622,25 @@ function handleSubmit(e) {
 function resetToEvalMode() {
   currentSessionId = '';
   document.getElementById('submitBtn').innerHTML = EVAL_LABEL;
+  document.getElementById('repoUrlRow').classList.remove('hidden');
+}
+
+function resetToNew() {
+  if (evaluating) return;
+  activeIdx = -1;
+  currentSessionId = '';
+  currentRaw = '';
+  currentChatter = '';
+  currentRepoUrl = '';
+  currentFiles = [];
+  document.getElementById('repoUrl').value = '';
+  document.getElementById('promptText').value = '';
+  document.getElementById('submitBtn').innerHTML = EVAL_LABEL;
+  document.getElementById('repoUrlRow').classList.remove('hidden');
+  document.getElementById('resultsWrapper').classList.add('hidden');
+  document.getElementById('actionsBar').classList.add('hidden');
+  document.getElementById('filesBar').classList.add('hidden');
+  renderHistory();
 }
 
 async function startEvaluation(repoUrl, prompt) {
@@ -837,8 +867,16 @@ function loadHistory() {
     const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
     const cutoff = Date.now() - THIRTY_DAYS;
     const fresh = stored.filter(e => e.timestamp && e.timestamp > cutoff);
-    history.push(...fresh);
+    // Deduplicate: keep only the most recent entry per repoUrl
+    const seen = new Set();
+    for (const e of fresh) {
+      if (!seen.has(e.repoUrl)) {
+        seen.add(e.repoUrl);
+        history.push(e);
+      }
+    }
   } catch(e) {}
+  saveHistory();
   renderHistory();
 }
 
@@ -857,20 +895,42 @@ function addToHistory(repoUrl, raw) {
   const name = repoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
   const now = Date.now();
   const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  // Deduplicate: remove existing entry for the same repo
+  const existingIdx = history.findIndex(h => h.repoUrl === repoUrl);
+  if (existingIdx !== -1) history.splice(existingIdx, 1);
+
   history.unshift({ name, time, timestamp: now, raw, repoUrl, files: [...currentFiles] });
   activeIdx = 0;
   saveHistory();
   renderHistory();
 }
 
+function deleteHistory(idx, evt) {
+  evt.stopPropagation();
+  history.splice(idx, 1);
+  if (activeIdx === idx) {
+    resetToNew();
+    return;
+  }
+  if (activeIdx > idx) activeIdx--;
+  saveHistory();
+  renderHistory();
+}
+
 function renderHistory() {
   const list = document.getElementById('historyList');
+  // "New" entry always at top
+  let html = `<div class="history-item ${activeIdx === -1 ? 'active' : ''}" onclick="resetToNew()">
+    <div class="repo-name" style="color:var(--accent)">+ New evaluation</div>
+  </div>`;
   if (history.length === 0) {
-    list.innerHTML = '<div class="sidebar-empty">No evaluations yet.<br>Results will appear here.</div>';
+    html += '<div class="sidebar-empty">No evaluations yet.<br>Results will appear here.</div>';
+    list.innerHTML = html;
     return;
   }
   const today = new Date().toDateString();
-  list.innerHTML = history.map((h, i) => {
+  html += history.map((h, i) => {
     const d = h.timestamp ? new Date(h.timestamp) : null;
     const label = d
       ? (d.toDateString() === today
@@ -880,9 +940,13 @@ function renderHistory() {
     return `
     <div class="history-item ${i === activeIdx ? 'active' : ''}" onclick="restoreHistory(${i})">
       <div class="repo-name">${escHtml(h.name)}</div>
-      <div class="timestamp">${escHtml(label)}</div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="timestamp">${escHtml(label)}</span>
+        <span class="history-delete" onclick="deleteHistory(${i}, event)" title="Remove from history">&times;</span>
+      </div>
     </div>`;
   }).join('');
+  list.innerHTML = html;
 }
 
 function restoreHistory(idx) {
@@ -891,6 +955,12 @@ function restoreHistory(idx) {
   const entry = history[idx];
   currentRaw = entry.raw;
   currentRepoUrl = entry.repoUrl;
+
+  // Hide repo URL (already known), switch to follow-up mode
+  document.getElementById('repoUrlRow').classList.add('hidden');
+  document.getElementById('repoUrl').value = entry.repoUrl;
+  document.getElementById('promptText').value = '';
+  document.getElementById('submitBtn').innerHTML = FOLLOWUP_LABEL;
 
   document.getElementById('resultsWrapper').classList.remove('hidden');
   document.getElementById('termCard').classList.add('hidden');
