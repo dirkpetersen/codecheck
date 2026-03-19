@@ -23,22 +23,34 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="codecheck")
 
-# In-memory store of files Claude created during analysis: session_id -> {rel_path -> content}
-_file_store: dict[str, dict[str, str]] = {}
+# Persistent directory for Claude-created files (survives session expiry, cleared after 30 days or on /tmp wipe)
+_FILES_BASE = Path(tempfile.gettempdir()) / "codecheck_files"
+_FILES_BASE.mkdir(exist_ok=True)
+
+# In-memory set of already-known files per session to avoid re-emitting: session_id -> set of rel paths
+_known_files: dict[str, set[str]] = {}
 
 # Active sessions kept alive for follow-up questions: session_id -> {tmp_dir, repo_dir, created}
 _sessions: dict[str, dict] = {}
 
 
 def _cleanup_sessions(max_age_secs: int = 7200):
-    """Remove sessions older than max_age_secs (default 2 hours)."""
+    """Remove repo clone sessions older than max_age_secs (default 2 hours)."""
     now = time.time()
     expired = [sid for sid, s in _sessions.items() if now - s.get("created", 0) > max_age_secs]
     for sid in expired:
         tmp = _sessions.pop(sid, {}).get("tmp_dir")
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
-        _file_store.pop(sid, None)
+        _known_files.pop(sid, None)
+
+
+def _cleanup_file_dirs(max_age_days: int = 30):
+    """Remove persistent file dirs older than max_age_days."""
+    cutoff = time.time() - max_age_days * 86400
+    for d in _FILES_BASE.iterdir():
+        if d.is_dir() and d.stat().st_mtime < cutoff:
+            shutil.rmtree(d, ignore_errors=True)
 
 REPO_ROOT = Path(__file__).parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -310,7 +322,8 @@ def _sse_event(event: str, data: str) -> str:
 
 
 def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
-    """Find new .md files Claude created (not in original git tree, not already known)."""
+    """Find new .md files Claude created (not in original git tree, not already known).
+    Copies them to _FILES_BASE/session_id/ for persistent serving."""
     repo_path = Path(repo_dir)
     try:
         r = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
@@ -319,7 +332,7 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
     except Exception:
         tracked = set()
 
-    already_known = set(_file_store.get(session_id, {}).keys())
+    already_known = _known_files.get(session_id, set())
 
     new_files: dict[str, str] = {}
     for f in sorted(repo_path.rglob("*.md")):
@@ -332,13 +345,17 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
         if rel_str in tracked or rel_str in already_known:
             continue
         try:
-            new_files[rel_str] = f.read_text(encoding="utf-8", errors="replace")
+            content = f.read_text(encoding="utf-8", errors="replace")
+            new_files[rel_str] = content
+            # Write to persistent files dir
+            dest = _FILES_BASE / session_id / rel_str
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
         except Exception:
             pass
 
     if new_files:
-        store = _file_store.setdefault(session_id, {})
-        store.update(new_files)
+        _known_files.setdefault(session_id, set()).update(new_files)
     return new_files
 
 
@@ -425,6 +442,7 @@ async def evaluate(request: Request):
 
     async def generate():
         _cleanup_sessions()
+        _cleanup_file_dirs()
 
         session_id = str(uuid.uuid4())
         yield _sse_event("session_id", session_id)
@@ -462,7 +480,7 @@ async def evaluate(request: Request):
             output_files = _collect_output_files(repo_dir, session_id)
             for fname in sorted(output_files):
                 url = f"/api/files/{session_id}/{fname}"
-                yield _sse_event("file", json.dumps({"name": fname, "url": url, "content": output_files[fname]}))
+                yield _sse_event("file", json.dumps({"name": fname, "url": url}))
 
             # Keep session alive for follow-up questions
             _sessions[session_id] = {
@@ -509,7 +527,7 @@ async def followup(request: Request):
         output_files = _collect_output_files(repo_dir, session_id)
         for fname in sorted(output_files):
             url = f"/api/files/{session_id}/{fname}"
-            yield _sse_event("file", json.dumps({"name": fname, "url": url, "content": output_files[fname]}))
+            yield _sse_event("file", json.dumps({"name": fname, "url": url}))
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -554,9 +572,10 @@ async def file_issue(request: Request):
 @app.get("/api/files/{session_id}/{filename:path}", response_class=HTMLResponse)
 async def get_file(session_id: str, filename: str):
     """Serve a Claude-created markdown file as a rendered HTML page."""
-    content = _file_store.get(session_id, {}).get(filename)
-    if content is None:
+    file_path = _FILES_BASE / session_id / filename
+    if not file_path.is_file():
         return HTMLResponse("<h2>File not found or session expired.</h2>", status_code=404)
+    content = file_path.read_text(encoding="utf-8", errors="replace")
     html = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", filename)
             .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
