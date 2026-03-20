@@ -165,7 +165,8 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                             continue_conversation: bool = False):
     """Run claude CLI in batch mode, streaming output via stream-json format."""
     model = "opus" if continue_conversation else "sonnet"
-    cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose"]
+    cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
+           "--dangerously-skip-permissions"]
     if continue_conversation:
         cmd.insert(1, "--continue")
     # Claude CLI requires both ~/bin and ~/.local/bin in PATH on startup
