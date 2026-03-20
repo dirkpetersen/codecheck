@@ -224,7 +224,7 @@ body::before{
   margin-bottom:16px;
   transition:height .5s cubic-bezier(.4,0,.2,1);
 }
-.term-card.shrunk{height:100px}
+.term-card.shrunk{height:115px}
 .term-card.hidden{display:none}
 .term-output{
   height:100%;overflow-y:auto;
@@ -723,8 +723,9 @@ async function startFollowup(sessionId, prompt) {
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
 
-  // Show terminal, keep report visible below
-  document.getElementById('termCard').classList.remove('shrunk', 'hidden');
+  // Show terminal at 5-line height, keep report visible below
+  document.getElementById('termCard').classList.remove('hidden');
+  document.getElementById('termCard').classList.add('shrunk');
   document.getElementById('termOutput').innerHTML = '';
 
   setStatus('loading', 'Continuing analysis...');
