@@ -673,6 +673,9 @@ async function startEvaluation(repoUrl, prompt) {
 
   setStatus('loading', 'Connecting...');
 
+  // Create history entry immediately so it persists even if user navigates away
+  addToHistory(repoUrl, '');
+
   try {
     const res = await fetch('/api/evaluate', {
       method: 'POST',
@@ -816,6 +819,11 @@ function handleSSE(event, data) {
       document.getElementById('termCard').classList.add('shrunk');
       document.getElementById('reportCard').classList.remove('hidden');
       renderMarkdown();
+      // Save intermediate report to history
+      if (history.length > 0 && activeIdx === 0) {
+        history[0].raw = currentRaw;
+        saveHistory();
+      }
       break;
 
     case 'done':
@@ -832,7 +840,12 @@ function handleSSE(event, data) {
         document.getElementById('reportCard').classList.remove('hidden');
         renderMarkdown();
       }
-      addToHistory(currentRepoUrl, currentRaw);
+      // Update the existing history entry (created at eval start)
+      if (history.length > 0 && activeIdx === 0) {
+        history[0].raw = currentRaw;
+        history[0].files = [...currentFiles];
+        saveHistory();
+      }
       if (ghAuthenticated) {
         document.getElementById('actionsBar').classList.remove('hidden');
         document.getElementById('issueStatus').textContent = '';
