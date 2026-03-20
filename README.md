@@ -12,6 +12,11 @@ python app.py
 
 Set `ANTHROPIC_API_KEY` in your environment or a `.env` file if the `claude` CLI is not installed.
 
+
+<img width="956" height="761" alt="image" src="https://github.com/user-attachments/assets/c82e2ac3-cec9-4d09-bfe3-aec2c862e28b" />
+
+
+
 ## How It Works
 
 1. Enter a GitHub repository URL (e.g. `user/repo` or `https://github.com/user/repo`)
