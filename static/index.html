@@ -470,6 +470,7 @@ body::before{
             File as GitHub Issue
           </button>
           <span class="issue-status" id="issueStatus"></span>
+          <a id="repoIssuesLink" href="#" target="_blank" rel="noopener" class="hidden" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">View issues &rarr;</a>
         </div>
         <div class="files-bar hidden" id="filesBar">
           <span class="files-label">Files</span>
@@ -658,6 +659,8 @@ async function startEvaluation(repoUrl, prompt) {
   document.getElementById('reportCard').classList.add('hidden');
   document.getElementById('mdOutput').innerHTML = '';
   document.getElementById('actionsBar').classList.add('hidden');
+  document.getElementById('issueStatus').textContent = '';
+  document.getElementById('repoIssuesLink').classList.add('hidden');
   currentFiles = [];
   const filesBar = document.getElementById('filesBar');
   filesBar.classList.add('hidden');
@@ -827,6 +830,10 @@ function handleSSE(event, data) {
       addToHistory(currentRepoUrl, currentRaw);
       if (ghAuthenticated) {
         document.getElementById('actionsBar').classList.remove('hidden');
+        document.getElementById('issueStatus').textContent = '';
+        const repoIssuesUrl = currentRepoUrl.replace(/\.git$/, '') + '/issues';
+        document.getElementById('repoIssuesLink').href = repoIssuesUrl;
+        document.getElementById('repoIssuesLink').classList.remove('hidden');
       }
       // Switch to follow-up mode
       document.getElementById('promptText').value = '';
@@ -996,6 +1003,10 @@ function restoreHistory(idx) {
   if (ghAuthenticated) {
     document.getElementById('actionsBar').classList.remove('hidden');
     document.getElementById('issueStatus').textContent = '';
+    const repoIssuesUrl = (entry.repoUrl || '').replace(/\.git$/, '') + '/issues';
+    const issuesLink = document.getElementById('repoIssuesLink');
+    issuesLink.href = repoIssuesUrl;
+    issuesLink.classList.remove('hidden');
   }
 }
 
