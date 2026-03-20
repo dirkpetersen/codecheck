@@ -134,13 +134,14 @@ def get_claude_bin() -> str | None:
     """Return path to claude CLI, or None if not found or inside Claude Code."""
     if os.environ.get("CLAUDECODE"):
         return None
+    # Prefer ~/.local/bin (standard user install location, may not be in PATH)
+    for d in [".local/bin", "bin"]:
+        candidate = Path.home() / d / "claude"
+        if candidate.is_file():
+            return str(candidate)
     found = shutil.which("claude")
     if found:
         return found
-    # ~/bin/claude not always in systemd/service PATH
-    candidate = Path.home() / "bin" / "claude"
-    if candidate.is_file():
-        return str(candidate)
     return None
 
 
@@ -257,21 +258,19 @@ async def stream_sdk(prompt: str, repo_dir: str):
 
     context = _build_repo_context(repo_dir)
     full_prompt = f"{prompt}\n\n---\n\nRepository contents:\n\n{context}"
-    model = os.environ.get("ANTHROPIC_MODEL", "us.anthropic.claude-sonnet-4-6-20250514")
-
     try:
-        if os.environ.get("AZURE_AI_FOUNDRY"):
+        if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
             # Azure AI Foundry: Anthropic-compatible endpoint
-            base_url = os.environ.get("AZURE_ENDPOINT", "").rstrip("/")
-            api_version = os.environ.get("AZURE_API_VERSION", "2025-04-01")
+            model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
+            base_url = os.environ.get("ANTHROPIC_FOUNDRY_BASE_URL", "").rstrip("/")
             client = anthropic.Anthropic(
                 base_url=f"{base_url}/anthropic/v1/",
-                api_key=os.environ.get("AZURE_API_KEY", ""),
-                default_headers={"api-version": api_version},
+                api_key=os.environ.get("ANTHROPIC_FOUNDRY_API_KEY", ""),
             )
         else:
+            model = os.environ.get("ANTHROPIC_MODEL", "global.anthropic.claude-opus-4-6-v1")
             client = anthropic.AnthropicBedrock(
-                aws_profile=os.environ.get("AWS_PROFILE", "bedrock"),
+                aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
                 aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
             )
 

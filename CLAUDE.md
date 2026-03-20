@@ -68,7 +68,7 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ```
 
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
-`stream_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model defaults to `us.anthropic.claude-sonnet-4-6-20250514` and can be overridden with `ANTHROPIC_MODEL`. Set `AZURE_AI_FOUNDRY=1` to use Azure instead of Bedrock.
+`stream_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model defaults to `global.anthropic.claude-opus-4-6-v1` (Bedrock) or `claude-opus-4-6` (Foundry) and can be overridden with `ANTHROPIC_MODEL`. Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
@@ -81,13 +81,13 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 |----------|---------|
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
-| `ANTHROPIC_MODEL` | Override model (default: `us.anthropic.claude-sonnet-4-6-20250514`) |
-| `AWS_PROFILE` | AWS profile for Bedrock (default: `bedrock`) |
+| `ANTHROPIC_MODEL` | Override model (Bedrock default: `global.anthropic.claude-opus-4-6-v1`, Foundry default: `claude-opus-4-6`) |
+| `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
+| `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |
 | `AWS_DEFAULT_REGION` | Bedrock region (default: `us-west-2`) |
-| `AZURE_AI_FOUNDRY` | Set to `1` to use Azure AI Foundry instead of Bedrock |
-| `AZURE_ENDPOINT` | Azure AI Foundry endpoint URL |
-| `AZURE_API_KEY` | Azure API key |
-| `AZURE_API_VERSION` | Azure API version (default: `2025-04-01`) |
+| `CLAUDE_CODE_USE_FOUNDRY` | Set to `1` to use Azure AI Foundry instead of Bedrock |
+| `ANTHROPIC_FOUNDRY_BASE_URL` | Azure AI Foundry endpoint URL |
+| `ANTHROPIC_FOUNDRY_API_KEY` | Azure AI Foundry API key |
 | `GH_TOKEN` / `GITHUB_TOKEN` | GitHub API auth (higher rate limits for cloning) |
 | `SYSTEMD_EXEC_PID` | Set by systemd — disables uvicorn auto-reload |
 

@@ -424,7 +424,7 @@ body::before{
       </button>
       <div class="logo">
         <h1>codecheck</h1>
-        <span>Code review powered by Claude <span id="commitBadge" style="font-family:var(--font-mono);font-size:.65rem;opacity:.55"></span></span>
+        <span>Code review powered by Claude Code <span id="commitBadge" style="font-family:var(--font-mono);font-size:.65rem;opacity:.55"></span></span>
       </div>
     </div>
 
@@ -562,7 +562,9 @@ document.addEventListener('DOMContentLoaded', () => {
     breaks: false,
     gfm: true,
   });
-  document.getElementById('repoUrl').addEventListener('input', resetToEvalMode);
+  document.getElementById('repoUrl').addEventListener('input', () => {
+    if (!currentSessionId) resetToEvalMode();
+  });
 });
 
 async function loadPrompts() {
@@ -582,7 +584,8 @@ async function loadPrompts() {
       const opt = sel.options[sel.selectedIndex];
       if (opt.dataset.body) {
         document.getElementById('promptText').value = opt.dataset.body;
-        resetToEvalMode();
+        // Only reset to eval mode if there's no active session (new evaluation)
+        if (!currentSessionId) resetToEvalMode();
       }
     });
   } catch (e) {

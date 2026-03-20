@@ -47,24 +47,33 @@ No environment variables needed. Just [install Claude Code](https://docs.anthrop
 
 When the CLI is unavailable, the app falls back to the Anthropic SDK via AWS Bedrock. This path builds a text context from the repo's files and streams the response. It doesn't have Claude Code's tool-use capabilities.
 
-```env
-AWS_PROFILE=bedrock
-AWS_DEFAULT_REGION=us-west-2
-ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-6-20250514
+First configure your AWS credentials:
+
+```bash
+aws --profile codecheck configure
+# Enter your AWS Access Key ID, Secret Access Key, and region (us-west-2) when prompted
 ```
 
-Requires `pip install anthropic[bedrock]` and configured AWS credentials.
+Then set in `.env`:
+
+```env
+CLAUDE_CODE_USE_BEDROCK=1
+AWS_PROFILE=codecheck
+AWS_DEFAULT_REGION=us-west-2
+ANTHROPIC_MODEL=global.anthropic.claude-opus-4-6-v1
+```
+
+Requires `pip install anthropic[bedrock]`.
 
 ### Tier 3: Azure AI Foundry (fallback)
 
 Same streaming SDK approach but via Microsoft Azure AI Foundry.
 
 ```env
-AZURE_AI_FOUNDRY=1
-AZURE_ENDPOINT=https://<resource>.services.ai.azure.com
-AZURE_API_KEY=your-azure-api-key
-AZURE_API_VERSION=2025-04-01
-ANTHROPIC_MODEL=claude-sonnet-4-6-20250514
+CLAUDE_CODE_USE_FOUNDRY=1
+ANTHROPIC_FOUNDRY_BASE_URL=https://<resource>.services.ai.azure.com
+ANTHROPIC_FOUNDRY_API_KEY=your-azure-api-key
+ANTHROPIC_MODEL=claude-opus-4-6
 ```
 
 Requires `pip install anthropic` and an Azure AI Foundry deployment. See [Anthropic on Azure docs](https://docs.anthropic.com/en/docs/build-with-claude/azure).
@@ -90,13 +99,13 @@ All settings with defaults are documented in `.env.default`. Key variables:
 |----------|---------|-------------|
 | `PORT` | `8000` | Server port |
 | `CLAUDECODE` | — | Set to skip CLI (auto-set inside Claude Code sessions) |
-| `ANTHROPIC_MODEL` | `us.anthropic.claude-sonnet-4-6-20250514` | Model for Bedrock/Azure fallback |
-| `AWS_PROFILE` | `bedrock` | AWS profile for Bedrock |
+| `ANTHROPIC_MODEL` | `global.anthropic.claude-opus-4-6-v1` (Bedrock) / `claude-opus-4-6` (Foundry) | Model for SDK fallback |
+| `CLAUDE_CODE_USE_BEDROCK` | — | Set to `1` to use AWS Bedrock |
+| `AWS_PROFILE` | `codecheck` | AWS profile for Bedrock (set up with `aws --profile codecheck configure`) |
 | `AWS_DEFAULT_REGION` | `us-west-2` | AWS region for Bedrock |
-| `AZURE_AI_FOUNDRY` | — | Set to `1` to use Azure instead of Bedrock |
-| `AZURE_ENDPOINT` | — | Azure AI Foundry endpoint URL |
-| `AZURE_API_KEY` | — | Azure API key |
-| `AZURE_API_VERSION` | `2025-04-01` | Azure API version |
+| `CLAUDE_CODE_USE_FOUNDRY` | — | Set to `1` to use Azure AI Foundry instead of Bedrock |
+| `ANTHROPIC_FOUNDRY_BASE_URL` | — | Azure AI Foundry endpoint URL |
+| `ANTHROPIC_FOUNDRY_API_KEY` | — | Azure AI Foundry API key |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub token for higher clone rate limits |
 
 ## Deployment
