@@ -959,12 +959,12 @@ function addToHistory(repoUrl, raw) {
 function deleteHistory(idx, evt) {
   evt.stopPropagation();
   history.splice(idx, 1);
+  saveHistory();
   if (activeIdx === idx) {
     resetToNew();
     return;
   }
   if (activeIdx > idx) activeIdx--;
-  saveHistory();
   renderHistory();
 }
 
