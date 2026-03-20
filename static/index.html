@@ -492,7 +492,7 @@ let currentChatter = '';
 let currentRepoUrl = '';
 let currentFiles = [];
 let currentSessionId = '';
-let savedRaw = '';  // previous report preserved across follow-ups
+let isFollowingUp = false;  // true while a follow-up is in progress
 let ghAuthenticated = false;
 let evaluating = false;
 let eventSource = null;
@@ -653,7 +653,7 @@ async function startEvaluation(repoUrl, prompt) {
   currentRaw = '';
   currentChatter = '';
   currentSessionId = '';
-  savedRaw = '';
+  isFollowingUp = false;
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -727,8 +727,8 @@ async function startEvaluation(repoUrl, prompt) {
 
 async function startFollowup(sessionId, prompt) {
   evaluating = true;
-  savedRaw = currentRaw;  // preserve previous report
-  currentRaw = '';
+  isFollowingUp = true;
+  // Keep currentRaw intact — we'll append to it when follow-up results arrive
   currentChatter = '';
 
   const btn = document.getElementById('submitBtn');
@@ -810,12 +810,12 @@ function handleSSE(event, data) {
     }
 
     case 'report':
-      if (savedRaw) {
-        currentRaw = savedRaw + '\n\n---\n\n## Follow-up\n\n' + data;
-        savedRaw = '';
+      if (isFollowingUp && currentRaw) {
+        currentRaw += '\n\n---\n\n## Follow-up\n\n' + data;
       } else {
         currentRaw = data;
       }
+      isFollowingUp = false;
       document.getElementById('termCard').classList.add('shrunk');
       document.getElementById('reportCard').classList.remove('hidden');
       renderMarkdown();
@@ -828,14 +828,16 @@ function handleSSE(event, data) {
 
     case 'done':
       setStatus('done', 'Analysis complete');
-      if (!currentRaw && currentChatter) {
-        // Bedrock path: streamed chunks are the final output
-        if (savedRaw) {
-          currentRaw = savedRaw + '\n\n---\n\n## Follow-up\n\n' + currentChatter;
-          savedRaw = '';
-        } else {
-          currentRaw = currentChatter;
-        }
+      if (isFollowingUp && currentChatter) {
+        // Follow-up with no report event (Bedrock path): append chatter
+        currentRaw += '\n\n---\n\n## Follow-up\n\n' + currentChatter;
+        isFollowingUp = false;
+        document.getElementById('termCard').classList.add('shrunk');
+        document.getElementById('reportCard').classList.remove('hidden');
+        renderMarkdown();
+      } else if (!currentRaw && currentChatter) {
+        // Initial eval Bedrock path: streamed chunks are the final output
+        currentRaw = currentChatter;
         document.getElementById('termCard').classList.add('shrunk');
         document.getElementById('reportCard').classList.remove('hidden');
         renderMarkdown();
