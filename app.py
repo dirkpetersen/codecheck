@@ -263,7 +263,7 @@ async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
         if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
             # Azure AI Foundry: Anthropic-compatible endpoint
             model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            default = "claude-opus-4-6" if use_opus else "claude-sonnet-4-6-20250514"
+            default = "claude-opus-4-6" if use_opus else "claude-sonnet-4-6"
             model = os.environ.get(model_key, default)
             base_url = os.environ.get("ANTHROPIC_FOUNDRY_BASE_URL", "").rstrip("/")
             client = anthropic.Anthropic(
@@ -272,7 +272,7 @@ async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
             )
         else:
             model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            default = "global.anthropic.claude-opus-4-6-v1" if use_opus else "global.anthropic.claude-sonnet-4-6-20250514"
+            default = "global.anthropic.claude-opus-4-6-v1" if use_opus else "global.anthropic.claude-sonnet-4-6"
             model = os.environ.get(model_key, default)
             client = anthropic.AnthropicBedrock(
                 aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
