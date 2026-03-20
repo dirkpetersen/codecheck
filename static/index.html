@@ -623,6 +623,7 @@ function resetToEvalMode() {
   currentSessionId = '';
   document.getElementById('submitBtn').innerHTML = EVAL_LABEL;
   document.getElementById('repoUrlRow').classList.remove('hidden');
+  document.getElementById('promptText').classList.remove('compact');
 }
 
 function resetToNew() {
