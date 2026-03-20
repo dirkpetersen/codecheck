@@ -1081,7 +1081,7 @@ async function shareReport() {
     const res = await fetch('/api/share', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: currentRaw, repo_name: repoName }),
+      body: JSON.stringify({ content: currentRaw, repo_name: repoName, files: currentFiles }),
     });
     const data = await res.json();
     if (data.url) {

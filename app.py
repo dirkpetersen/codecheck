@@ -526,13 +526,15 @@ async def followup(request: Request):
         repo_dir = session["repo_dir"]
         yield _sse_event("status", "Continuing analysis...")
 
-        full_prompt = _PREAMBLE + prompt
         claude_bin = get_claude_bin()
         if claude_bin:
-            async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir,
+            # Don't prepend _PREAMBLE for --continue: Claude already has it from the initial prompt
+            async for event in stream_claude_cli(claude_bin, prompt, repo_dir,
                                                  continue_conversation=True):
                 yield event
         else:
+            # SDK fallback has no memory, so include preamble
+            full_prompt = _PREAMBLE + prompt
             async for event in stream_sdk(full_prompt, repo_dir):
                 yield event
 
@@ -606,6 +608,7 @@ async def share_report(request: Request):
     body = await request.json()
     content = body.get("content", "").strip()
     repo_name = body.get("repo_name", "report")
+    files = body.get("files", [])  # [{name, url}]
     if not content:
         return JSONResponse({"error": "No content to share"}, status_code=400)
 
@@ -616,6 +619,36 @@ async def share_report(request: Request):
     share_path.write_text(content, encoding="utf-8")
     # Store repo name as metadata
     (shares_dir / f"{share_id}.meta").write_text(repo_name, encoding="utf-8")
+
+    # Copy session files into shares/{share_id}/ so shared links work independently
+    shared_files = []
+    for f in files:
+        url = f.get("url", "")
+        name = f.get("name", "")
+        if not url or not name:
+            continue
+        # url looks like /api/files/{session_id}/{filename}
+        parts = url.removeprefix("/api/files/").split("/", 1)
+        if len(parts) != 2:
+            continue
+        session_id, fname = parts[0], parts[1]
+        src = (_FILES_BASE / session_id / fname).resolve()
+        session_dir = (_FILES_BASE / session_id).resolve()
+        if not str(src).startswith(str(session_dir) + os.sep) or not src.is_file():
+            continue
+        dest_dir = shares_dir / share_id
+        dest_dir.mkdir(exist_ok=True)
+        dest = dest_dir / fname
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(src), str(dest))
+        shared_files.append({"name": name, "url": f"/share/{share_id}/file/{fname}"})
+
+    # Store file list as JSON metadata
+    if shared_files:
+        (shares_dir / f"{share_id}.files.json").write_text(
+            json.dumps(shared_files), encoding="utf-8"
+        )
+
     return JSONResponse({"id": share_id, "url": f"/share/{share_id}"})
 
 
@@ -625,15 +658,65 @@ async def get_share(share_id: str):
     # Validate share_id format (hex only, prevent traversal)
     if not share_id.isalnum() or len(share_id) > 20:
         return HTMLResponse("<h2>Invalid share link.</h2>", status_code=400)
-    share_path = _FILES_BASE / "shares" / f"{share_id}.md"
+    shares_dir = _FILES_BASE / "shares"
+    share_path = shares_dir / f"{share_id}.md"
     if not share_path.is_file():
         return HTMLResponse("<h2>Shared report not found or expired.</h2>", status_code=404)
     content = share_path.read_text(encoding="utf-8", errors="replace")
-    meta_path = _FILES_BASE / "shares" / f"{share_id}.meta"
+    meta_path = shares_dir / f"{share_id}.meta"
     repo_name = meta_path.read_text(encoding="utf-8").strip() if meta_path.is_file() else "Report"
     safe_title = html.escape(f"codecheck — {repo_name}")
+
+    # Load attached files if any
+    files_path = shares_dir / f"{share_id}.files.json"
+    files_html = ""
+    if files_path.is_file():
+        try:
+            files = json.loads(files_path.read_text(encoding="utf-8"))
+            if files:
+                chips = "".join(
+                    f'<a href="{html.escape(f["url"])}" target="_blank" '
+                    f'style="display:inline-flex;align-items:center;gap:5px;'
+                    f'background:#1c2129;border:1px solid #30363d;border-radius:20px;'
+                    f'color:#E8520A;font-family:var(--mono);font-size:.72rem;'
+                    f'padding:4px 12px;text-decoration:none;margin-right:6px;margin-bottom:6px">'
+                    f'{html.escape(f["name"])}</a>'
+                    for f in files
+                )
+                files_html = (
+                    f'<div style="margin-top:20px;padding-top:16px;border-top:1px solid #30363d">'
+                    f'<span style="font-size:.72rem;color:#6e7681;font-weight:600;'
+                    f'letter-spacing:.04em;text-transform:uppercase;margin-right:8px">Files</span>'
+                    f'{chips}</div>'
+                )
+        except Exception:
+            pass
+
     page = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", safe_title)
+            .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
+    # Inject files bar before the copy button div
+    if files_html:
+        page = page.replace(
+            '<div style="display:flex;justify-content:flex-end;',
+            files_html + '\n<div style="display:flex;justify-content:flex-end;',
+        )
+    return HTMLResponse(page)
+
+
+@app.get("/share/{share_id}/file/{filename:path}", response_class=HTMLResponse)
+async def get_shared_file(share_id: str, filename: str):
+    """Serve a file attached to a shared report."""
+    if not share_id.isalnum() or len(share_id) > 20:
+        return HTMLResponse("<h2>Invalid share link.</h2>", status_code=400)
+    share_dir = (_FILES_BASE / "shares" / share_id).resolve()
+    file_path = (share_dir / filename).resolve()
+    if not str(file_path).startswith(str(share_dir) + os.sep) or not file_path.is_file():
+        return HTMLResponse("<h2>File not found.</h2>", status_code=404)
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+    safe_filename = html.escape(filename)
+    page = (_FILE_VIEWER
+            .replace("PLACEHOLDER_FILENAME", safe_filename)
             .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
     return HTMLResponse(page)
 
