@@ -68,7 +68,7 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ```
 
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
-`stream_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model defaults to `global.anthropic.claude-opus-4-6-v1` (Bedrock) or `claude-opus-4-6` (Foundry) and can be overridden with `ANTHROPIC_MODEL`. Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
+`stream_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. Initial evals use Sonnet (`ANTHROPIC_DEFAULT_SONNET_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
@@ -81,7 +81,8 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 |----------|---------|
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
-| `ANTHROPIC_MODEL` | Override model (Bedrock default: `global.anthropic.claude-opus-4-6-v1`, Foundry default: `claude-opus-4-6`) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model for follow-ups (Bedrock: `global.anthropic.claude-opus-4-6-v1`, Foundry: `claude-opus-4-6`) |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model for initial eval (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
 | `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |
 | `AWS_DEFAULT_REGION` | Bedrock region (default: `us-west-2`) |

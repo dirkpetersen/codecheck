@@ -60,7 +60,8 @@ Then set in `.env`:
 CLAUDE_CODE_USE_BEDROCK=1
 AWS_PROFILE=codecheck
 AWS_DEFAULT_REGION=us-west-2
-ANTHROPIC_MODEL=global.anthropic.claude-opus-4-6-v1
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-6-v1
+ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
 ```
 
 Requires `pip install anthropic[bedrock]`.
@@ -73,7 +74,8 @@ Same streaming SDK approach but via Microsoft Azure AI Foundry.
 CLAUDE_CODE_USE_FOUNDRY=1
 ANTHROPIC_FOUNDRY_BASE_URL=https://<resource>.services.ai.azure.com
 ANTHROPIC_FOUNDRY_API_KEY=your-azure-api-key
-ANTHROPIC_MODEL=claude-opus-4-6
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6
+ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
 ```
 
 Requires `pip install anthropic` and an Azure AI Foundry deployment. See [Anthropic on Azure docs](https://docs.anthropic.com/en/docs/build-with-claude/azure).
@@ -99,7 +101,8 @@ All settings with defaults are documented in `.env.default`. Key variables:
 |----------|---------|-------------|
 | `PORT` | `8000` | Server port |
 | `CLAUDECODE` | — | Set to skip CLI (auto-set inside Claude Code sessions) |
-| `ANTHROPIC_MODEL` | `global.anthropic.claude-opus-4-6-v1` (Bedrock) / `claude-opus-4-6` (Foundry) | Model for SDK fallback |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-6-v1` (Bedrock) / `claude-opus-4-6` (Foundry) | Opus model for follow-ups |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6` (Bedrock) / `claude-sonnet-4-6` (Foundry) | Sonnet model for initial eval |
 | `CLAUDE_CODE_USE_BEDROCK` | — | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | `codecheck` | AWS profile for Bedrock (set up with `aws --profile codecheck configure`) |
 | `AWS_DEFAULT_REGION` | `us-west-2` | AWS region for Bedrock |
