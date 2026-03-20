@@ -247,8 +247,8 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         yield _sse_event("done", "")
 
 
-async def stream_bedrock_sdk(prompt: str, repo_dir: str):
-    """Fallback when Claude CLI is unavailable: use Anthropic SDK via AWS Bedrock."""
+async def stream_sdk(prompt: str, repo_dir: str):
+    """Fallback when Claude CLI is unavailable: use Anthropic SDK via Bedrock or Azure."""
     try:
         import anthropic
     except ImportError:
@@ -257,13 +257,24 @@ async def stream_bedrock_sdk(prompt: str, repo_dir: str):
 
     context = _build_repo_context(repo_dir)
     full_prompt = f"{prompt}\n\n---\n\nRepository contents:\n\n{context}"
+    model = os.environ.get("ANTHROPIC_MODEL", "us.anthropic.claude-sonnet-4-6-20250514")
 
     try:
-        client = anthropic.AnthropicBedrock(
-            aws_profile="bedrock",
-            aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
-        )
-        model = os.environ.get("ANTHROPIC_MODEL", "global.anthropic.claude-sonnet-4-6")
+        if os.environ.get("AZURE_AI_FOUNDRY"):
+            # Azure AI Foundry: Anthropic-compatible endpoint
+            base_url = os.environ.get("AZURE_ENDPOINT", "").rstrip("/")
+            api_version = os.environ.get("AZURE_API_VERSION", "2025-04-01")
+            client = anthropic.Anthropic(
+                base_url=f"{base_url}/anthropic/v1/",
+                api_key=os.environ.get("AZURE_API_KEY", ""),
+                default_headers={"api-version": api_version},
+            )
+        else:
+            client = anthropic.AnthropicBedrock(
+                aws_profile=os.environ.get("AWS_PROFILE", "bedrock"),
+                aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
+            )
+
         with client.messages.stream(
             model=model,
             max_tokens=8192,
@@ -273,7 +284,8 @@ async def stream_bedrock_sdk(prompt: str, repo_dir: str):
                 yield _sse_event("chunk", text)
         yield _sse_event("done", "")
     except Exception as e:
-        yield _sse_event("error", f"Bedrock error: {e}")
+        backend = "Azure" if os.environ.get("AZURE_AI_FOUNDRY") else "Bedrock"
+        yield _sse_event("error", f"{backend} error: {e}")
 
 
 def _build_repo_context(repo_dir: str, max_bytes: int = 200_000) -> str:
@@ -474,7 +486,7 @@ async def evaluate(request: Request):
                 async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir):
                     yield event
             else:
-                async for event in stream_bedrock_sdk(full_prompt, repo_dir):
+                async for event in stream_sdk(full_prompt, repo_dir):
                     yield event
 
             # Collect any .md files Claude wrote during analysis
@@ -521,7 +533,7 @@ async def followup(request: Request):
                                                  continue_conversation=True):
                 yield event
         else:
-            async for event in stream_bedrock_sdk(full_prompt, repo_dir):
+            async for event in stream_sdk(full_prompt, repo_dir):
                 yield event
 
         # Collect any new .md files from this follow-up

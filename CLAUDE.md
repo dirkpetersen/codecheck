@@ -15,7 +15,7 @@ The app has three user-facing inputs:
 
 On submit:
 - Clone the target repo locally (shallow, depth 1)
-- Use the textarea content as a prompt with Claude CLI (or Bedrock SDK fallback) to analyze the repo
+- Use the textarea content as a prompt with Claude CLI (or Bedrock/Azure SDK fallback) to analyze the repo
 - Stream results to the UI via SSE
 - If `gh` CLI is authenticated, offer a button to file results as a GitHub issue
 
@@ -25,7 +25,7 @@ On submit:
 - **Web framework**: FastAPI (async, SSE streaming for live analysis output)
 - **Prompt templates**: `.prmpt` files — first line is display name, rest is prompt body
 - **Primary Claude invocation**: Claude CLI via `asyncio.create_subprocess_exec` using `stream-json` output format
-- **Fallback Claude invocation**: Anthropic SDK via AWS Bedrock (`stream_bedrock_sdk`)
+- **Fallback Claude invocation**: Anthropic SDK via AWS Bedrock or Azure AI Foundry (`stream_sdk`)
 - **External dependencies**: `gh` CLI (GitHub auth), `claude` CLI, `git`, `anthropic` SDK
 
 ## Development Commands
@@ -67,11 +67,11 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 # parse JSON lines from proc.stdout
 ```
 
-### Tier 2: Anthropic SDK via AWS Bedrock (fallback when CLI unavailable)
-`stream_bedrock_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock`. The model defaults to `global.anthropic.claude-sonnet-4-6` and can be overridden with `ANTHROPIC_MODEL`.
+### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
+`stream_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model defaults to `us.anthropic.claude-sonnet-4-6-20250514` and can be overridden with `ANTHROPIC_MODEL`. Set `AZURE_AI_FOUNDRY=1` to use Azure instead of Bedrock.
 
 ### Self-invocation guard
-Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to Bedrock:
+Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
 ```python
 claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else None
 ```
@@ -79,10 +79,15 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 ### Key environment variables
 | Variable | Purpose |
 |----------|---------|
-| `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use Bedrock SDK |
+| `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
-| `ANTHROPIC_MODEL` | Override Bedrock model (default: `global.anthropic.claude-sonnet-4-6`) |
+| `ANTHROPIC_MODEL` | Override model (default: `us.anthropic.claude-sonnet-4-6-20250514`) |
+| `AWS_PROFILE` | AWS profile for Bedrock (default: `bedrock`) |
 | `AWS_DEFAULT_REGION` | Bedrock region (default: `us-west-2`) |
+| `AZURE_AI_FOUNDRY` | Set to `1` to use Azure AI Foundry instead of Bedrock |
+| `AZURE_ENDPOINT` | Azure AI Foundry endpoint URL |
+| `AZURE_API_KEY` | Azure API key |
+| `AZURE_API_VERSION` | Azure API version (default: `2025-04-01`) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | GitHub API auth (higher rate limits for cloning) |
 | `SYSTEMD_EXEC_PID` | Set by systemd — disables uvicorn auto-reload |
 
@@ -100,4 +105,4 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 - Prompt template files use the `.prmpt` extension; loaded from **both** `prompts/` in the repo root and `~/.codecheck/prompts/` (user-local). User-local templates take precedence on filename collision.
 - GitHub auth state is determined by running `gh auth status`
 - Repo cloning uses a `tempfile.mkdtemp` directory, cleaned up in a `finally` block after analysis
-- The `_build_repo_context` function (Bedrock fallback path) caps context at 200KB and skips `.git`, `node_modules`, `__pycache__`, `venv`, `vendor`, `dist`, `build`
+- The `_build_repo_context` function (Bedrock/Azure fallback path) caps context at 200KB and skips `.git`, `node_modules`, `__pycache__`, `venv`, `vendor`, `dist`, `build`
