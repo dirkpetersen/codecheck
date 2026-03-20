@@ -192,8 +192,10 @@ body::before{
 .form-select option{background:var(--bg-surface);color:var(--text-primary)}
 .form-textarea{
   min-height:200px;resize:vertical;
+  transition:min-height .4s ease, height .4s ease;
   font-family:var(--font-mono);font-size:.82rem;line-height:1.55;
 }
+.form-textarea.compact{min-height:100px;height:100px}
 .btn-evaluate{
   display:inline-flex;align-items:center;gap:8px;
   background:var(--accent-dim);
@@ -634,6 +636,7 @@ function resetToNew() {
   document.getElementById('repoUrl').value = '';
   document.getElementById('promptSelect').value = '';
   document.getElementById('promptText').value = '';
+  document.getElementById('promptText').classList.remove('compact');
   document.getElementById('submitBtn').innerHTML = EVAL_LABEL;
   document.getElementById('repoUrlRow').classList.remove('hidden');
   document.getElementById('resultsWrapper').classList.add('hidden');
@@ -835,8 +838,9 @@ function handleSSE(event, data) {
         document.getElementById('repoIssuesLink').href = repoIssuesUrl;
         document.getElementById('repoIssuesLink').classList.remove('hidden');
       }
-      // Switch to follow-up mode
+      // Switch to follow-up mode, shrink prompt box to 5 lines
       document.getElementById('promptText').value = '';
+      document.getElementById('promptText').classList.add('compact');
       document.getElementById('submitBtn').innerHTML = FOLLOWUP_LABEL;
       break;
 
@@ -978,6 +982,7 @@ function restoreHistory(idx) {
   document.getElementById('repoUrlRow').classList.add('hidden');
   document.getElementById('repoUrl').value = entry.repoUrl;
   document.getElementById('promptText').value = '';
+  document.getElementById('promptText').classList.add('compact');
   document.getElementById('submitBtn').innerHTML = FOLLOWUP_LABEL;
 
   document.getElementById('resultsWrapper').classList.remove('hidden');
