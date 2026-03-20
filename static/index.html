@@ -505,6 +505,35 @@ function makeFileChip(f) {
   return chip;
 }
 
+// ── Terminal chatter renderer ──
+const TOOL_COLORS = {
+  Read:'#58a6ff', Write:'#3fb950', Edit:'#ffa657', Bash:'#e3b341',
+  Glob:'#79c0ff', Grep:'#79c0ff', WebFetch:'#bc8cff', Task:'#ff7b72',
+};
+function renderChatter(text) {
+  return text.split('\n').map(line => {
+    // Tool use line: **[ToolName]** detail
+    const m = line.match(/^\*\*\[(\w+)\]\*\*(.*)$/);
+    if (m) {
+      const color = TOOL_COLORS[m[1]] || '#E8520A';
+      const badge = `<span style="color:${color};font-weight:700">[${escHtml(m[1])}]</span>`;
+      const detail = m[2].trim();
+      const detailHtml = detail
+        ? ` <span style="color:#cdd9e5">${escHtml(detail)}</span>`
+        : '';
+      return badge + detailHtml;
+    }
+    // Tool result line: ↳ preview
+    if (line.startsWith('  ↳ ')) {
+      const rest = escHtml(line.slice(4))
+        .replace(/(_…\([^)]+\)_)/g, '<span style="color:#444d56;font-style:italic">$1</span>');
+      return `<span style="color:#444d56">  ↳ </span><span style="color:#586069">${rest}</span>`;
+    }
+    // Regular chatter text
+    return line ? `<span style="color:#7d8fa3">${escHtml(line)}</span>` : '';
+  }).join('\n');
+}
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
   loadPrompts();
@@ -624,7 +653,7 @@ async function startEvaluation(repoUrl, prompt) {
   btn.disabled = true;
 
   document.getElementById('resultsWrapper').classList.remove('hidden');
-  document.getElementById('termOutput').textContent = '';
+  document.getElementById('termOutput').innerHTML = '';
   document.getElementById('termCard').classList.remove('shrunk', 'hidden');
   document.getElementById('reportCard').classList.add('hidden');
   document.getElementById('mdOutput').innerHTML = '';
@@ -696,7 +725,7 @@ async function startFollowup(sessionId, prompt) {
 
   // Show terminal, keep report visible below
   document.getElementById('termCard').classList.remove('shrunk', 'hidden');
-  document.getElementById('termOutput').textContent = '';
+  document.getElementById('termOutput').innerHTML = '';
 
   setStatus('loading', 'Continuing analysis...');
 
@@ -763,7 +792,7 @@ function handleSSE(event, data) {
     case 'chunk': {
       currentChatter += data + '\n';
       const term = document.getElementById('termOutput');
-      term.textContent = currentChatter;
+      term.innerHTML = renderChatter(currentChatter);
       term.scrollTop = term.scrollHeight;
       break;
     }
