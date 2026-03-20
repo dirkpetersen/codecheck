@@ -35,17 +35,23 @@ python app.py
 
 ## Claude Code Backends
 
-The app **always prefers the Claude Code CLI** when it is installed. The Bedrock/Azure SDK env vars below configure the fallback path — they are only used when the `claude` binary is not found. Initial evaluations use Sonnet; follow-up questions use Opus.
+The app requires **both** the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) **and** an authentication method. If the CLI is not installed or no credentials are configured, the app will not function. Initial evaluations use Sonnet; follow-up questions use Opus.
 
-### Tier 1: Claude Code CLI (preferred)
+The app checks for the `claude` binary in `~/.local/bin/claude`, `~/bin/claude`, then `PATH`. When found, it runs Claude Code via subprocess with `--output-format stream-json --verbose` — this gives the richest experience with tool calls, file operations, and the full agent loop streamed live.
 
-When the `claude` binary is installed, the app runs it via subprocess with `--output-format stream-json --verbose`. This gives the richest experience — tool calls, file operations, and the full Claude Code agent loop are streamed live.
+You must configure **one** of the following authentication methods:
 
-No environment variables needed. Just [install Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started). The app checks `~/.local/bin/claude`, `~/bin/claude`, then `PATH`.
+### Option 1: Anthropic API Key
 
-### Tier 2: AWS Bedrock SDK (fallback when CLI unavailable)
+The simplest setup — just set your API key:
 
-When the CLI is not installed, the app falls back to the Anthropic SDK via AWS Bedrock. This path builds a text context from the repo's files and streams the response. It doesn't have Claude Code's tool-use capabilities.
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Option 2: AWS Bedrock
+
+Uses the Anthropic SDK via AWS Bedrock for authentication.
 
 First configure your AWS credentials:
 
@@ -64,11 +70,9 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-6-v1
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
 ```
 
-Requires `pip install anthropic[bedrock]`.
+### Option 3: Azure AI Foundry
 
-### Tier 3: Azure AI Foundry (fallback when CLI unavailable)
-
-Same streaming SDK approach but via Microsoft Azure AI Foundry.
+Uses the Anthropic SDK via Microsoft Azure AI Foundry for authentication.
 
 ```env
 CLAUDE_CODE_USE_FOUNDRY=1
@@ -78,7 +82,11 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6
 ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
 ```
 
-Requires `pip install anthropic` and an Azure AI Foundry deployment. See [Anthropic on Azure docs](https://docs.anthropic.com/en/docs/build-with-claude/azure).
+See [Anthropic on Azure docs](https://docs.anthropic.com/en/docs/build-with-claude/azure).
+
+### SDK Fallback (no CLI)
+
+If the Claude Code CLI is **not installed**, the app falls back to using the Anthropic SDK directly (requires Option 2 or 3 above plus `pip install anthropic[bedrock]` or `pip install anthropic`). This path builds a text context from the repo's files and streams the response, but doesn't have Claude Code's tool-use capabilities.
 
 ## Prompt Templates
 
@@ -101,14 +109,15 @@ All settings with defaults are documented in `.env.default`. Key variables:
 |----------|---------|-------------|
 | `PORT` | `8000` | Server port |
 | `CLAUDECODE` | — | Set to skip CLI (auto-set inside Claude Code sessions) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `global.anthropic.claude-opus-4-6-v1` (Bedrock) / `claude-opus-4-6` (Foundry) | Opus model for follow-ups |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `global.anthropic.claude-sonnet-4-6` (Bedrock) / `claude-sonnet-4-6` (Foundry) | Sonnet model for initial eval |
-| `CLAUDE_CODE_USE_BEDROCK` | — | Set to `1` to use AWS Bedrock |
-| `AWS_PROFILE` | `codecheck` | AWS profile for Bedrock (set up with `aws --profile codecheck configure`) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (Option 1) |
+| `CLAUDE_CODE_USE_BEDROCK` | — | Set to `1` to use AWS Bedrock (Option 2) |
+| `AWS_PROFILE` | `codecheck` | AWS profile (set up with `aws --profile codecheck configure`) |
 | `AWS_DEFAULT_REGION` | `us-west-2` | AWS region for Bedrock |
-| `CLAUDE_CODE_USE_FOUNDRY` | — | Set to `1` to use Azure AI Foundry instead of Bedrock |
+| `CLAUDE_CODE_USE_FOUNDRY` | — | Set to `1` to use Azure AI Foundry (Option 3) |
 | `ANTHROPIC_FOUNDRY_BASE_URL` | — | Azure AI Foundry endpoint URL |
 | `ANTHROPIC_FOUNDRY_API_KEY` | — | Azure AI Foundry API key |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | per-backend | Opus model for follow-ups (SDK fallback only) |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | per-backend | Sonnet model for initial eval (SDK fallback only) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub token for higher clone rate limits |
 
 ## Deployment
