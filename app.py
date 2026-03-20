@@ -2,6 +2,7 @@
 """codecheck - A code review web app powered by Claude Code."""
 
 import asyncio
+import html
 import json
 import os
 import shutil
@@ -572,14 +573,19 @@ async def file_issue(request: Request):
 @app.get("/api/files/{session_id}/{filename:path}", response_class=HTMLResponse)
 async def get_file(session_id: str, filename: str):
     """Serve a Claude-created markdown file as a rendered HTML page."""
-    file_path = _FILES_BASE / session_id / filename
+    # Resolve and confirm the path stays within the expected session directory (prevent path traversal)
+    session_dir = (_FILES_BASE / session_id).resolve()
+    file_path = (session_dir / filename).resolve()
+    if not str(file_path).startswith(str(session_dir) + os.sep):
+        return HTMLResponse("<h2>Invalid path.</h2>", status_code=400)
     if not file_path.is_file():
         return HTMLResponse("<h2>File not found or session expired.</h2>", status_code=404)
     content = file_path.read_text(encoding="utf-8", errors="replace")
-    html = (_FILE_VIEWER
-            .replace("PLACEHOLDER_FILENAME", filename)
+    safe_filename = html.escape(filename)
+    page = (_FILE_VIEWER
+            .replace("PLACEHOLDER_FILENAME", safe_filename)
             .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
-    return HTMLResponse(html)
+    return HTMLResponse(page)
 
 
 @app.get("/", response_class=HTMLResponse)
