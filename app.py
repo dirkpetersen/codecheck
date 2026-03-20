@@ -333,6 +333,11 @@ def _build_repo_context(repo_dir: str, max_bytes: int = 200_000) -> str:
     return "".join(parts) if parts else "(empty repository)"
 
 
+def _safe_json_for_html(content: str) -> str:
+    """JSON-encode content and escape </ to prevent </script> breakout."""
+    return json.dumps(content).replace("</", "<\\/")
+
+
 def _sse_event(event: str, data: str) -> str:
     """Format a server-sent event."""
     # Escape newlines in data for SSE protocol
@@ -385,7 +390,7 @@ _FILE_VIEWER = """\
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0d1117;--surface:#161b22;--inset:#0d1117;--border:#30363d;
@@ -421,8 +426,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:
 <div style="display:flex;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
 <button id="cpBtn" onclick="navigator.clipboard.writeText(md).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy markdown'},1500)})" style="display:inline-flex;align-items:center;gap:5px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--font);font-size:.75rem;padding:5px 14px;border-radius:var(--r);cursor:pointer">Copy markdown</button>
 </div></div>
+<script id="mdData" type="application/json">PLACEHOLDER_CONTENT_JSON</script>
 <script>
-const md=PLACEHOLDER_CONTENT_JSON;
+const md=JSON.parse(document.getElementById('mdData').textContent);
 document.getElementById('out').innerHTML=marked.parse(md);
 document.querySelectorAll('pre code:not(.hljs)').forEach(el=>hljs.highlightElement(el));
 </script></body></html>"""
@@ -604,7 +610,7 @@ async def get_file(session_id: str, filename: str):
     safe_filename = html.escape(filename)
     page = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", safe_filename)
-            .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
+            .replace("PLACEHOLDER_CONTENT_JSON", _safe_json_for_html(content)))
     return HTMLResponse(page)
 
 
@@ -700,7 +706,7 @@ async def get_share(share_id: str):
 
     page = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", safe_title)
-            .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
+            .replace("PLACEHOLDER_CONTENT_JSON", _safe_json_for_html(content)))
     # Inject files bar before the copy button div
     if files_html:
         page = page.replace(
@@ -723,7 +729,7 @@ async def get_shared_file(share_id: str, filename: str):
     safe_filename = html.escape(filename)
     page = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", safe_filename)
-            .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
+            .replace("PLACEHOLDER_CONTENT_JSON", _safe_json_for_html(content)))
     return HTMLResponse(page)
 
 

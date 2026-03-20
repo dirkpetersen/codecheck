@@ -35,17 +35,17 @@ python app.py
 
 ## Claude Code Backends
 
-The app uses a tiered fallback to invoke Claude Code / Claude:
+The app **always prefers the Claude Code CLI** when it is installed. The Bedrock/Azure SDK env vars below configure the fallback path — they are only used when the `claude` binary is not found. Initial evaluations use Sonnet; follow-up questions use Opus.
 
 ### Tier 1: Claude Code CLI (preferred)
 
 When the `claude` binary is installed, the app runs it via subprocess with `--output-format stream-json --verbose`. This gives the richest experience — tool calls, file operations, and the full Claude Code agent loop are streamed live.
 
-No environment variables needed. Just [install Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started).
+No environment variables needed. Just [install Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started). The app checks `~/.local/bin/claude`, `~/bin/claude`, then `PATH`.
 
-### Tier 2: AWS Bedrock SDK (fallback)
+### Tier 2: AWS Bedrock SDK (fallback when CLI unavailable)
 
-When the CLI is unavailable, the app falls back to the Anthropic SDK via AWS Bedrock. This path builds a text context from the repo's files and streams the response. It doesn't have Claude Code's tool-use capabilities.
+When the CLI is not installed, the app falls back to the Anthropic SDK via AWS Bedrock. This path builds a text context from the repo's files and streams the response. It doesn't have Claude Code's tool-use capabilities.
 
 First configure your AWS credentials:
 
@@ -66,7 +66,7 @@ ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
 
 Requires `pip install anthropic[bedrock]`.
 
-### Tier 3: Azure AI Foundry (fallback)
+### Tier 3: Azure AI Foundry (fallback when CLI unavailable)
 
 Same streaming SDK approach but via Microsoft Azure AI Foundry.
 

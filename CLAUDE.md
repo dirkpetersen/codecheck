@@ -56,19 +56,19 @@ claude-skills/          # Symlink to sibling repo with Claude invocation referen
 
 The app uses a two-tier fallback:
 
-### Tier 1: Claude CLI via subprocess (preferred)
-`stream_claude_cli` in `app.py` runs the Claude CLI with `--output-format stream-json --verbose` and parses newline-delimited JSON. Two event types carry content:
+### Tier 1: Claude CLI via subprocess (always preferred when installed)
+The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose` and parses newline-delimited JSON. Initial evals use `--model sonnet`, follow-ups use `--model opus`. Two event types carry content:
 - `assistant` events: iterate `message.content[]` for `type=="text"` blocks
 - `result` events: read the top-level `result` string
 
 ```python
-cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose"]
 proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 # parse JSON lines from proc.stdout
 ```
 
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
-`stream_sdk` in `app.py` builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. Initial evals use Sonnet (`ANTHROPIC_DEFAULT_SONNET_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
+`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. Initial evals use Sonnet (`ANTHROPIC_DEFAULT_SONNET_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
