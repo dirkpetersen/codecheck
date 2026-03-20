@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="codecheck")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 # Persistent directory for Claude-created files (survives session expiry, cleared after 30 days or on /tmp wipe)
 _FILES_BASE = Path(tempfile.gettempdir()) / "codecheck_files"
