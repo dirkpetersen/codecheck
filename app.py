@@ -163,7 +163,8 @@ def check_gh_auth() -> bool:
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                             continue_conversation: bool = False):
     """Run claude CLI in batch mode, streaming output via stream-json format."""
-    cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+    model = "opus" if continue_conversation else "sonnet"
+    cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose"]
     if continue_conversation:
         cmd.insert(1, "--continue")
     # Claude CLI requires both ~/bin and ~/.local/bin in PATH on startup
@@ -248,7 +249,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         yield _sse_event("done", "")
 
 
-async def stream_sdk(prompt: str, repo_dir: str):
+async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
     """Fallback when Claude CLI is unavailable: use Anthropic SDK via Bedrock or Azure."""
     try:
         import anthropic
@@ -261,14 +262,18 @@ async def stream_sdk(prompt: str, repo_dir: str):
     try:
         if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
             # Azure AI Foundry: Anthropic-compatible endpoint
-            model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
+            model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
+            default = "claude-opus-4-6" if use_opus else "claude-sonnet-4-6-20250514"
+            model = os.environ.get(model_key, default)
             base_url = os.environ.get("ANTHROPIC_FOUNDRY_BASE_URL", "").rstrip("/")
             client = anthropic.Anthropic(
                 base_url=f"{base_url}/anthropic/v1/",
                 api_key=os.environ.get("ANTHROPIC_FOUNDRY_API_KEY", ""),
             )
         else:
-            model = os.environ.get("ANTHROPIC_MODEL", "global.anthropic.claude-opus-4-6-v1")
+            model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
+            default = "global.anthropic.claude-opus-4-6-v1" if use_opus else "global.anthropic.claude-sonnet-4-6-20250514"
+            model = os.environ.get(model_key, default)
             client = anthropic.AnthropicBedrock(
                 aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
                 aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
@@ -534,7 +539,7 @@ async def followup(request: Request):
         else:
             # SDK fallback has no memory, so include preamble
             full_prompt = _PREAMBLE + prompt
-            async for event in stream_sdk(full_prompt, repo_dir):
+            async for event in stream_sdk(full_prompt, repo_dir, use_opus=True):
                 yield event
 
         # Collect any new .md files from this follow-up
