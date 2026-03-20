@@ -370,6 +370,7 @@ body::before{
 .btn-issue:hover{background:var(--accent-glow)}
 .btn-issue svg{width:14px;height:14px}
 .issue-status{font-size:.8rem;color:var(--text-muted)}
+.share-status{font-size:.8rem;color:var(--text-muted)}
 
 /* ── Skeleton loader ── */
 .skeleton-line{
@@ -468,12 +469,17 @@ body::before{
           </button>
         </div>
         <div class="actions-bar hidden" id="actionsBar">
-          <button class="btn-issue" onclick="fileIssue()">
+          <button class="btn-issue" id="btnFileIssue" onclick="fileIssue()" style="display:none">
             <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3.5M8 10.5v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             File as GitHub Issue
           </button>
           <span class="issue-status" id="issueStatus"></span>
           <a id="repoIssuesLink" href="#" target="_blank" rel="noopener" class="hidden" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">View issues &rarr;</a>
+          <button class="btn-issue" onclick="shareReport()" style="margin-left:auto">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M10 2.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM3.5 5.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM10 8.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5z" stroke="currentColor" stroke-width="1.1"/><path d="M5.5 7.5l5-2.5M5.5 9l5 2.5" stroke="currentColor" stroke-width="1.1"/></svg>
+            Share
+          </button>
+          <span class="share-status" id="shareStatus"></span>
         </div>
         <div class="files-bar hidden" id="filesBar">
           <span class="files-label">Files</span>
@@ -590,6 +596,9 @@ async function checkGhAuth() {
     const res = await fetch('/api/gh-auth');
     const data = await res.json();
     ghAuthenticated = data.authenticated;
+    if (ghAuthenticated) {
+      document.getElementById('btnFileIssue').style.display = '';
+    }
   } catch { ghAuthenticated = false; }
 }
 
@@ -665,6 +674,7 @@ async function startEvaluation(repoUrl, prompt) {
   document.getElementById('mdOutput').innerHTML = '';
   document.getElementById('actionsBar').classList.add('hidden');
   document.getElementById('issueStatus').textContent = '';
+  document.getElementById('shareStatus').textContent = '';
   document.getElementById('repoIssuesLink').classList.add('hidden');
   currentFiles = [];
   const filesBar = document.getElementById('filesBar');
@@ -848,8 +858,9 @@ function handleSSE(event, data) {
         history[0].files = [...currentFiles];
         saveHistory();
       }
+      document.getElementById('actionsBar').classList.remove('hidden');
+      document.getElementById('shareStatus').textContent = '';
       if (ghAuthenticated) {
-        document.getElementById('actionsBar').classList.remove('hidden');
         document.getElementById('issueStatus').textContent = '';
         const repoIssuesUrl = currentRepoUrl.replace(/\.git$/, '') + '/issues';
         document.getElementById('repoIssuesLink').href = repoIssuesUrl;
@@ -1022,8 +1033,9 @@ function restoreHistory(idx) {
     filesBar.classList.add('hidden');
   }
 
+  document.getElementById('actionsBar').classList.remove('hidden');
+  document.getElementById('shareStatus').textContent = '';
   if (ghAuthenticated) {
-    document.getElementById('actionsBar').classList.remove('hidden');
     document.getElementById('issueStatus').textContent = '';
     const repoIssuesUrl = (entry.repoUrl || '').replace(/\.git$/, '') + '/issues';
     const issuesLink = document.getElementById('repoIssuesLink');
@@ -1052,6 +1064,33 @@ async function fileIssue() {
       status.innerHTML = `<a href="${escHtml(data.url)}" target="_blank" style="color:var(--green)">Issue created &rarr;</a>`;
     } else {
       status.textContent = data.error || 'Failed to create issue';
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Share report ──
+async function shareReport() {
+  const status = document.getElementById('shareStatus');
+  if (!currentRaw) { status.textContent = 'Nothing to share'; return; }
+  status.textContent = 'Creating link...';
+
+  const repoName = currentRepoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+  try {
+    const res = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: currentRaw, repo_name: repoName }),
+    });
+    const data = await res.json();
+    if (data.url) {
+      const fullUrl = location.origin + data.url;
+      await navigator.clipboard.writeText(fullUrl);
+      status.innerHTML = `<a href="${escHtml(data.url)}" target="_blank" style="color:var(--accent)">Link copied!</a>`;
+      setTimeout(() => { status.textContent = ''; }, 4000);
+    } else {
+      status.textContent = data.error || 'Failed to share';
     }
   } catch (e) {
     status.textContent = 'Error: ' + e.message;

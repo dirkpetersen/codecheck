@@ -600,6 +600,44 @@ async def get_file(session_id: str, filename: str):
     return HTMLResponse(page)
 
 
+@app.post("/api/share")
+async def share_report(request: Request):
+    """Save a report and return a shareable URL."""
+    body = await request.json()
+    content = body.get("content", "").strip()
+    repo_name = body.get("repo_name", "report")
+    if not content:
+        return JSONResponse({"error": "No content to share"}, status_code=400)
+
+    share_id = uuid.uuid4().hex[:12]
+    shares_dir = _FILES_BASE / "shares"
+    shares_dir.mkdir(exist_ok=True)
+    share_path = shares_dir / f"{share_id}.md"
+    share_path.write_text(content, encoding="utf-8")
+    # Store repo name as metadata
+    (shares_dir / f"{share_id}.meta").write_text(repo_name, encoding="utf-8")
+    return JSONResponse({"id": share_id, "url": f"/share/{share_id}"})
+
+
+@app.get("/share/{share_id}", response_class=HTMLResponse)
+async def get_share(share_id: str):
+    """Serve a shared report as a rendered HTML page."""
+    # Validate share_id format (hex only, prevent traversal)
+    if not share_id.isalnum() or len(share_id) > 20:
+        return HTMLResponse("<h2>Invalid share link.</h2>", status_code=400)
+    share_path = _FILES_BASE / "shares" / f"{share_id}.md"
+    if not share_path.is_file():
+        return HTMLResponse("<h2>Shared report not found or expired.</h2>", status_code=404)
+    content = share_path.read_text(encoding="utf-8", errors="replace")
+    meta_path = _FILES_BASE / "shares" / f"{share_id}.meta"
+    repo_name = meta_path.read_text(encoding="utf-8").strip() if meta_path.is_file() else "Report"
+    safe_title = html.escape(f"codecheck — {repo_name}")
+    page = (_FILE_VIEWER
+            .replace("PLACEHOLDER_FILENAME", safe_title)
+            .replace("PLACEHOLDER_CONTENT_JSON", json.dumps(content)))
+    return HTMLResponse(page)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve the single-page application."""
