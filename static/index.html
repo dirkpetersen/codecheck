@@ -645,6 +645,7 @@ function resetToEvalMode() {
 
 function resetToNew() {
   if (evaluating) return;
+  if (currentSessionId) fetch('/api/session/' + currentSessionId, { method: 'DELETE' }).catch(() => {});
   activeIdx = -1;
   currentSessionId = '';
   currentRaw = '';
@@ -960,7 +961,7 @@ function addToHistory(repoUrl, raw) {
   const existingIdx = history.findIndex(h => h.repoUrl === repoUrl);
   if (existingIdx !== -1) history.splice(existingIdx, 1);
 
-  history.unshift({ name, time, timestamp: now, raw, repoUrl, files: [...currentFiles] });
+  history.unshift({ name, time, timestamp: now, raw, repoUrl, files: [...currentFiles], sessionId: currentSessionId });
   activeIdx = 0;
   saveHistory();
   renderHistory();
@@ -968,6 +969,8 @@ function addToHistory(repoUrl, raw) {
 
 function deleteHistory(idx, evt) {
   evt.stopPropagation();
+  const sid = history[idx].sessionId;
+  if (sid) fetch('/api/session/' + sid, { method: 'DELETE' }).catch(() => {});
   history.splice(idx, 1);
   saveHistory();
   if (activeIdx === idx) {

@@ -865,6 +865,18 @@ async def get_shared_file(share_id: str, filename: str):
     return HTMLResponse(page)
 
 
+@app.delete("/api/session/{session_id}")
+async def delete_session(session_id: str):
+    """Immediately clean up a session's cloned repo and free disk space."""
+    session = _sessions.pop(session_id, None)
+    if session:
+        tmp = session.get("tmp_dir")
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+        _known_files.pop(session_id, None)
+    return JSONResponse({"ok": True})
+
+
 @app.get("/browse/{session_id}", response_class=HTMLResponse)
 @app.get("/browse/{session_id}/{path:path}", response_class=HTMLResponse)
 async def browse_repo(session_id: str, path: str = ""):
