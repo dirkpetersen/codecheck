@@ -497,6 +497,15 @@ body::before{
 </div>
 
 <script>
+// ── Helpers ──
+function toIssuesUrl(raw) {
+  let url = (raw || '').trim().replace(/\.git$/, '').replace(/\/$/, '');
+  if (url.startsWith('git@github.com:')) url = 'https://github.com/' + url.slice(15);
+  else if (url.startsWith('github.com/')) url = 'https://' + url;
+  else if (!url.startsWith('http://') && !url.startsWith('https://') && url.includes('/')) url = 'https://github.com/' + url;
+  return url + '/issues';
+}
+
 // ── State ──
 const history = [];
 let activeIdx = -1;
@@ -876,7 +885,7 @@ function handleSSE(event, data) {
       document.getElementById('btnBrowse').style.display = '';
       if (ghAuthenticated) {
         document.getElementById('issueStatus').textContent = '';
-        const repoIssuesUrl = currentRepoUrl.replace(/\.git$/, '') + '/issues';
+        const repoIssuesUrl = toIssuesUrl(currentRepoUrl);
         document.getElementById('repoIssuesLink').href = repoIssuesUrl;
         document.getElementById('repoIssuesLink').classList.remove('hidden');
       }
@@ -1054,7 +1063,7 @@ function restoreHistory(idx) {
   document.getElementById('btnBrowse').style.display = 'none';
   if (ghAuthenticated) {
     document.getElementById('issueStatus').textContent = '';
-    const repoIssuesUrl = (entry.repoUrl || '').replace(/\.git$/, '') + '/issues';
+    const repoIssuesUrl = toIssuesUrl(entry.repoUrl);
     const issuesLink = document.getElementById('repoIssuesLink');
     issuesLink.href = repoIssuesUrl;
     issuesLink.classList.remove('hidden');
