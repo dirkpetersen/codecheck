@@ -475,6 +475,10 @@ body::before{
           </button>
           <span class="issue-status" id="issueStatus"></span>
           <a id="repoIssuesLink" href="#" target="_blank" rel="noopener" class="hidden" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">View issues &rarr;</a>
+          <a class="btn-issue" id="btnBrowse" href="#" target="_blank" rel="noopener" style="display:none">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M1.5 4h4l1 1.5H14.5v8.5h-13V4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M4.5 8.5h7M4.5 11h4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Browse repo
+          </a>
           <button class="btn-issue" onclick="shareReport()" style="margin-left:auto">
             <svg viewBox="0 0 16 16" fill="none"><path d="M10 2.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM3.5 5.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM10 8.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5z" stroke="currentColor" stroke-width="1.1"/><path d="M5.5 7.5l5-2.5M5.5 9l5 2.5" stroke="currentColor" stroke-width="1.1"/></svg>
             Share
@@ -647,6 +651,7 @@ function resetToNew() {
   currentChatter = '';
   currentRepoUrl = '';
   currentFiles = [];
+  document.getElementById('btnBrowse').style.display = 'none';
   document.getElementById('repoUrl').value = '';
   document.getElementById('promptSelect').value = '';
   document.getElementById('promptText').value = '';
@@ -863,6 +868,8 @@ function handleSSE(event, data) {
       }
       document.getElementById('actionsBar').classList.remove('hidden');
       document.getElementById('shareStatus').textContent = '';
+      document.getElementById('btnBrowse').href = '/browse/' + currentSessionId;
+      document.getElementById('btnBrowse').style.display = '';
       if (ghAuthenticated) {
         document.getElementById('issueStatus').textContent = '';
         const repoIssuesUrl = currentRepoUrl.replace(/\.git$/, '') + '/issues';
@@ -1038,6 +1045,7 @@ function restoreHistory(idx) {
 
   document.getElementById('actionsBar').classList.remove('hidden');
   document.getElementById('shareStatus').textContent = '';
+  document.getElementById('btnBrowse').style.display = 'none';
   if (ghAuthenticated) {
     document.getElementById('issueStatus').textContent = '';
     const repoIssuesUrl = (entry.repoUrl || '').replace(/\.git$/, '') + '/issues';

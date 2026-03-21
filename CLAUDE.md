@@ -17,7 +17,10 @@ On submit:
 - Clone the target repo locally (shallow, depth 1)
 - Use the textarea content as a prompt with Claude CLI (or Bedrock/Azure SDK fallback) to analyze the repo
 - Stream results to the UI via SSE
+- Collect any `.md` files Claude created during analysis; serve them via `/api/files/{session_id}/{path}`
+- Keep the session alive (repo clone + Claude context) for up to 2 hours to support follow-up questions
 - If `gh` CLI is authenticated, offer a button to file results as a GitHub issue
+- Reports can be shared via `/api/share` → `/share/{share_id}` (persisted in `_FILES_BASE/shares/`)
 
 ## Tech Stack
 
@@ -57,7 +60,7 @@ claude-skills/          # Symlink to sibling repo with Claude invocation referen
 The app uses a two-tier fallback:
 
 ### Tier 1: Claude CLI via subprocess (always preferred when installed)
-The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose` and parses newline-delimited JSON. Initial evals use `--model sonnet`, follow-ups use `--model opus`. Two event types carry content:
+The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Initial evals use `--model sonnet`, follow-ups use `--model opus` with `--continue` (resumes prior CLI session). Two event types carry content:
 - `assistant` events: iterate `message.content[]` for `type=="text"` blocks
 - `result` events: read the top-level `result` string
 
@@ -99,7 +102,23 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 - **Dark, minimal style**: GitHub dark mode aesthetic (CSS vars in `static/index.html`)
 - **Rendered markdown**: Claude's response is parsed with `marked.js` and syntax-highlighted with `highlight.js`
 - **Session history**: Past evaluations kept in-browser during the session; displayed as a clickable sidebar list
-- **Streaming via SSE**: `/api/evaluate` yields `chunk`, `status`, `error`, and `done` events; frontend appends chunks and re-renders markdown incrementally
+- **Streaming via SSE**: `/api/evaluate` and `/api/followup` yield these event types:
+  - `session_id` — UUID for this session (first event)
+  - `status` — status message string
+  - `chunk` — text fragment to append
+  - `report` — final result string from CLI `result` event
+  - `file` — JSON `{"name": "...", "url": "..."}` for each `.md` file Claude created
+  - `error` — error message string
+  - `done` — signals stream end
+
+## Prompt preamble
+
+Every prompt (initial and SDK follow-ups) is prefixed with `_PREAMBLE` (defined in `app.py`), which instructs Claude to:
+- Only create files with `.md` extension
+- Prefer folding short output into the main report rather than creating extra files
+- Create multiple `.md` files only when the analysis is large and warrants distinct documents
+
+Follow-up prompts sent via `--continue` (CLI path) do **not** get the preamble prepended, since Claude already has it in context.
 
 ## Conventions
 

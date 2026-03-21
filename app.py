@@ -434,6 +434,138 @@ document.querySelectorAll('pre code:not(.hljs)').forEach(el=>hljs.highlightEleme
 </script></body></html>"""
 
 
+_BROWSER_PAGE = """\
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Browse — codecheck</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d1117;--surface:#161b22;--raised:#1c2129;--border:#30363d;
+  --text:#e6edf3;--muted:#8b949e;--dim:#6e7681;--accent:#E8520A;
+  --blue:#58a6ff;--font:'DM Sans',system-ui,sans-serif;
+  --mono:'JetBrains Mono',monospace;--r:8px}
+html{font-size:15px;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh}
+.topbar{padding:12px 24px;border-bottom:1px solid var(--border);background:var(--surface);
+  display:flex;align-items:center;gap:14px;min-height:48px;flex-wrap:wrap}
+.brand{font-family:var(--mono);font-size:.78rem;color:var(--dim);white-space:nowrap;flex-shrink:0}
+.brand b{background:linear-gradient(135deg,#E8520A,#8B2200);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.bc{font-family:var(--mono);font-size:.82rem;display:flex;align-items:center;
+  gap:2px;flex-wrap:wrap;min-width:0}
+.bc a{color:var(--blue);text-decoration:none}
+.bc a:hover{text-decoration:underline}
+.bc .sep{color:var(--dim);padding:0 3px}
+.bc .cur{color:var(--text)}
+.wrap{max-width:960px;margin:0 auto;padding:20px 24px 60px}
+.tree{width:100%;border-collapse:collapse}
+.tree td{padding:5px 8px}
+.tree tbody tr:hover td{background:var(--raised);cursor:pointer}
+.tree a{text-decoration:none;display:block;font-family:var(--mono);font-size:.83rem}
+.dir-row .ico{color:var(--blue)}
+.dir-row a{color:var(--blue)}
+.file-row a{color:var(--text)}
+.ico{width:24px;text-align:center;color:var(--dim);font-size:.82rem;user-select:none}
+.fext{color:var(--dim);font-size:.72rem;padding-left:6px}
+.sep-row td{padding:2px 0}
+.sep-row hr{border:none;border-top:1px solid var(--border);margin:0}
+.meta{font-family:var(--mono);font-size:.76rem;color:var(--muted);margin-bottom:14px;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.meta .dot{color:var(--dim)}
+.code-box{border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.code-box pre{margin:0;overflow-x:auto}
+.code-box code{display:block;padding:16px 20px;font-family:var(--mono);font-size:.79rem;
+  line-height:1.6;background:var(--raised)}
+.trunc{color:var(--dim);font-size:.78rem;padding:10px 20px;
+  border-top:1px solid var(--border);font-family:var(--mono)}
+</style></head><body>
+<div class="topbar">
+  <span class="brand"><b>codecheck</b>&nbsp;/&nbsp;browse</span>
+  <div class="bc" id="bc"></div>
+</div>
+<div class="wrap" id="wrap"></div>
+<script id="D" type="application/json">BROWSER_DATA_JSON</script>
+<script>
+const D=JSON.parse(document.getElementById('D').textContent);
+const LANG={py:'python',js:'javascript',jsx:'javascript',ts:'typescript',tsx:'typescript',
+  hpp:'cpp',hh:'cpp',cc:'cpp',cxx:'cpp',h:'cpp',cu:'cpp',cuh:'cpp',
+  sh:'bash',bash:'bash',zsh:'bash',yml:'yaml',rb:'ruby',kt:'kotlin',
+  rs:'rust',md:'markdown',htm:'html',r:'r',R:'r',jl:'julia'};
+
+function esc(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
+function browseUrl(p){
+  if(!p)return'/browse/'+D.session_id;
+  return'/browse/'+D.session_id+'/'+p.split('/').map(encodeURIComponent).join('/');
+}
+
+function buildBc(){
+  const bc=document.getElementById('bc');
+  const a=document.createElement('a');
+  a.href=browseUrl('');a.textContent='root';bc.appendChild(a);
+  if(!D.rel_path)return;
+  D.rel_path.split('/').forEach((seg,i,arr)=>{
+    bc.appendChild(Object.assign(document.createElement('span'),{className:'sep',textContent:'/'}));
+    if(i===arr.length-1){
+      bc.appendChild(Object.assign(document.createElement('span'),{className:'cur',textContent:seg}));
+    }else{
+      const ln=document.createElement('a');
+      ln.href=browseUrl(arr.slice(0,i+1).join('/'));
+      ln.textContent=seg;bc.appendChild(ln);
+    }
+  });
+}
+
+function renderDir(){
+  const base=D.rel_path?D.rel_path+'/':'';
+  const dirs=D.entries.filter(e=>e.is_dir);
+  const files=D.entries.filter(e=>!e.is_dir);
+  let rows='';
+  if(D.rel_path){
+    const up=D.rel_path.split('/').slice(0,-1).join('/');
+    rows+=`<tr class="dir-row"><td class="ico">&#8593;</td>
+      <td><a href="${esc(browseUrl(up))}">..</a></td><td></td></tr>`;
+  }
+  dirs.forEach(e=>{
+    rows+=`<tr class="dir-row"><td class="ico">&#9658;</td>
+      <td><a href="${esc(browseUrl(base+e.name))}">${esc(e.name)}/</a></td><td></td></tr>`;
+  });
+  if(dirs.length&&files.length)rows+=`<tr class="sep-row"><td colspan="3"><hr></td></tr>`;
+  files.forEach(e=>{
+    const dot=e.name.lastIndexOf('.');
+    const ext=dot>0?e.name.slice(dot+1):'';
+    rows+=`<tr class="file-row"><td class="ico">&middot;</td>
+      <td><a href="${esc(browseUrl(base+e.name))}">${esc(e.name)}</a></td>
+      <td class="fext">${esc(ext)}</td></tr>`;
+  });
+  if(!rows)rows='<tr><td colspan="3" style="padding:24px;color:var(--dim);text-align:center;font-family:var(--mono);font-size:.83rem">Empty directory</td></tr>';
+  document.getElementById('wrap').innerHTML=`<table class="tree"><tbody>${rows}</tbody></table>`;
+}
+
+function renderFile(){
+  document.title=D.name+' \u2014 codecheck';
+  const lang=LANG[D.ext]||D.ext;
+  let hi;
+  try{
+    hi=lang&&hljs.getLanguage(lang)
+      ?hljs.highlight(D.text,{language:lang}).value
+      :hljs.highlightAuto(D.text).value;
+  }catch(e){hi=esc(D.text)}
+  document.getElementById('wrap').innerHTML=
+    `<div class="meta">${esc(D.rel_path)}<span class="dot">&middot;</span>${D.lines} lines`+
+    (D.truncated?`<span class="dot">&middot;</span><span style="color:var(--accent)">truncated at 200 KB</span>`:'')+
+    `</div><div class="code-box"><pre><code>${hi}</code></pre>`+
+    (D.truncated?`<div class="trunc">&hellip; file truncated at 200 KB for display</div>`:'')+
+    `</div>`;
+}
+
+buildBc();
+if(D.type==='dir')renderDir();else renderFile();
+</script></body></html>"""
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -730,6 +862,66 @@ async def get_shared_file(share_id: str, filename: str):
     page = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", safe_filename)
             .replace("PLACEHOLDER_CONTENT_JSON", _safe_json_for_html(content)))
+    return HTMLResponse(page)
+
+
+@app.get("/browse/{session_id}", response_class=HTMLResponse)
+@app.get("/browse/{session_id}/{path:path}", response_class=HTMLResponse)
+async def browse_repo(session_id: str, path: str = ""):
+    """Browse the cloned repository: directory listing or syntax-highlighted file view."""
+    session = _sessions.get(session_id)
+    if not session:
+        return HTMLResponse(
+            "<html><body style='background:#0d1117;color:#e6edf3;font-family:monospace;padding:40px'>"
+            "<h2>Session not found</h2>"
+            "<p>Sessions expire after 2 hours. Please run a new evaluation.</p>"
+            "</body></html>",
+            status_code=404,
+        )
+
+    repo_dir = Path(session["repo_dir"]).resolve()
+    clean_path = path.strip("/")
+    target = (repo_dir / clean_path).resolve() if clean_path else repo_dir
+
+    # Prevent path traversal
+    try:
+        target.relative_to(repo_dir)
+    except ValueError:
+        return HTMLResponse("<html><body>Invalid path.</body></html>", status_code=400)
+
+    rel_path = "" if target == repo_dir else str(target.relative_to(repo_dir)).replace("\\", "/")
+
+    if target.is_dir():
+        entries = []
+        try:
+            for item in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+                entries.append({"name": item.name, "is_dir": item.is_dir()})
+        except PermissionError:
+            pass
+        data: dict = {"type": "dir", "session_id": session_id, "rel_path": rel_path, "entries": entries}
+
+    elif target.is_file():
+        MAX = 200_000
+        try:
+            raw = target.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return HTMLResponse(
+                f"<html><body style='background:#0d1117;color:#e6edf3;font-family:monospace;padding:40px'>"
+                f"<h2>Cannot read file</h2><p>{html.escape(str(e))}</p></body></html>",
+                status_code=500,
+            )
+        truncated = len(raw) > MAX
+        text = raw[:MAX] if truncated else raw
+        ext = target.suffix.lstrip(".") or ""
+        data = {
+            "type": "file", "session_id": session_id, "rel_path": rel_path,
+            "name": target.name, "text": text, "ext": ext, "truncated": truncated,
+            "lines": text.count("\n") + 1,
+        }
+    else:
+        return HTMLResponse("<html><body>Path not found.</body></html>", status_code=404)
+
+    page = _BROWSER_PAGE.replace("BROWSER_DATA_JSON", json.dumps(data).replace("</", "<\\/"))
     return HTMLResponse(page)
 
 
