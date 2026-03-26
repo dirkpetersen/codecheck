@@ -1,5 +1,6 @@
 Security Review
-Perform a security audit of this repository. Analyze the code for vulnerabilities and security anti-patterns:
+Perform a security audit of this repository. Analyze the code for vulnerabilities and security anti-patterns. 
+Treat the following list as inclusive but not exhaustive and consider any other potential security issues that are not listed:
 
 1. **Injection Flaws** — SQL injection, command injection, XSS, template injection, path traversal.
 2. **Authentication & Authorization** — Are auth mechanisms sound? Any bypasses? Hardcoded credentials?
@@ -9,4 +10,5 @@ Perform a security audit of this repository. Analyze the code for vulnerabilitie
 6. **Dependencies** — Known CVEs in dependencies? Pinned versions?
 7. **Configuration** — Debug mode enabled? Verbose error messages exposed? CORS misconfigured?
 
-Rate overall risk (Low / Medium / High / Critical) and list findings with severity, affected files, and recommended fixes. Flag any issues that need immediate attention.
+Rate overall risk (Low / Medium / High / Critical) and list findings with severity, affected files, and recommended fixes. 
+Flag any issues that need immediate attention.
