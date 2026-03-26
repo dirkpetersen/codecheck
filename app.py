@@ -44,6 +44,7 @@ def _cleanup_sessions(max_age_secs: int = 7200):
         tmp = _sessions.pop(sid, {}).get("tmp_dir")
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(_FILES_BASE / sid, ignore_errors=True)
         _known_files.pop(sid, None)
 
 
@@ -730,8 +731,9 @@ async def file_issue(request: Request):
 
 @app.get("/api/files/{session_id}/{filename:path}", response_class=HTMLResponse)
 async def get_file(session_id: str, filename: str):
-    """Serve a Claude-created markdown file as a rendered HTML page."""
-    # Resolve and confirm the path stays within the expected session directory (prevent path traversal)
+    """Serve a Claude-created markdown file — only accessible while the session is active."""
+    if session_id not in _sessions:
+        return HTMLResponse("<h2>File not found or session expired.</h2>", status_code=404)
     session_dir = (_FILES_BASE / session_id).resolve()
     file_path = (session_dir / filename).resolve()
     if not str(file_path).startswith(str(session_dir) + os.sep):
@@ -874,6 +876,7 @@ async def delete_session(session_id: str):
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
         _known_files.pop(session_id, None)
+    shutil.rmtree(_FILES_BASE / session_id, ignore_errors=True)
     return JSONResponse({"ok": True})
 
 
