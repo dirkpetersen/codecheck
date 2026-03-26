@@ -398,6 +398,15 @@ body::before{
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 .form-card{animation:fadeUp .4s ease both}
 .results-wrapper{animation:fadeUp .35s ease both .1s}
+
+/* ── Footer ── */
+.app-footer{
+  padding:8px 28px;
+  border-top:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  font-size:.7rem;color:var(--text-muted);
+}
+.app-footer.hidden{display:none}
 </style>
 </head>
 <body>
@@ -493,6 +502,10 @@ body::before{
         </div>
       </div>
     </div>
+    <footer class="app-footer hidden" id="appFooter">
+      <span id="footerBeta"></span>
+      <span id="footerContact"></span>
+    </footer>
   </div>
 </div>
 
@@ -567,6 +580,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadHistory();
   fetch('/api/version').then(r => r.json()).then(d => {
     if (d.commit) document.getElementById('commitBadge').textContent = d.commit;
+    if (d.beta_message) document.getElementById('footerBeta').textContent = d.beta_message;
+    if (d.contact) document.getElementById('footerContact').textContent = d.contact;
+    if (d.beta_message || d.contact) document.getElementById('appFooter').classList.remove('hidden');
   }).catch(() => {});
   marked.setOptions({
     highlight: (code, lang) => {

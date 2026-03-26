@@ -573,7 +573,11 @@ if(D.type==='dir')renderDir();else renderFile();
 
 @app.get("/api/version")
 async def get_version():
-    return JSONResponse({"commit": _GIT_COMMIT})
+    return JSONResponse({
+        "commit": _GIT_COMMIT,
+        "beta_message": os.environ.get("BETA_MESSAGE", ""),
+        "contact": os.environ.get("CONTACT", ""),
+    })
 
 
 @app.get("/api/prompts")
