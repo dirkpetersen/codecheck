@@ -66,7 +66,7 @@ Then set in `.env`:
 CLAUDE_CODE_USE_BEDROCK=1
 AWS_PROFILE=codecheck
 AWS_DEFAULT_REGION=us-west-2
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-6-v1
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-7-v1
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
 ```
 
@@ -78,7 +78,7 @@ Uses the Anthropic SDK via Microsoft Azure AI Foundry for authentication.
 CLAUDE_CODE_USE_FOUNDRY=1
 ANTHROPIC_FOUNDRY_BASE_URL=https://<resource>.services.ai.azure.com
 ANTHROPIC_FOUNDRY_API_KEY=your-azure-api-key
-ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7
 ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
 ```
 

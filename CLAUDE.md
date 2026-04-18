@@ -84,7 +84,8 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 |----------|---------|
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model for follow-ups (Bedrock: `global.anthropic.claude-opus-4-6-v1`, Foundry: `claude-opus-4-6`) |
+| `ANTHROPIC_API_KEY` | Auth option 1 — Anthropic API key (used directly by CLI and SDK) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model for follow-ups (Bedrock: `global.anthropic.claude-opus-4-7-v1`, Foundry: `claude-opus-4-7`) |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model for initial eval (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
 | `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |
@@ -94,6 +95,8 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 | `ANTHROPIC_FOUNDRY_API_KEY` | Azure AI Foundry API key |
 | `GH_TOKEN` / `GITHUB_TOKEN` | GitHub API auth (higher rate limits for cloning) |
 | `SYSTEMD_EXEC_PID` | Set by systemd — disables uvicorn auto-reload |
+| `BETA_MESSAGE` | Optional banner message shown in the UI footer |
+| `CONTACT` | Optional contact string shown in the UI footer |
 
 ## UI Design Decisions
 
@@ -126,3 +129,5 @@ Follow-up prompts sent via `--continue` (CLI path) do **not** get the preamble p
 - GitHub auth state is determined by running `gh auth status`
 - Repo cloning uses a `tempfile.mkdtemp` directory, cleaned up in a `finally` block after analysis
 - The `_build_repo_context` function (Bedrock/Azure fallback path) caps context at 200KB and skips `.git`, `node_modules`, `__pycache__`, `venv`, `vendor`, `dist`, `build`
+- Generated `.md` files and shared reports live under `_FILES_BASE` (`$TMPDIR/codecheck_files/`): per-session under `<session_id>/`, shared reports under `shares/<share_id>/`. Retained ~30 days.
+- Shipped prompt templates: `code-quality`, `gpu-cuda`, `multi-gpu`, `research-software`, `security`

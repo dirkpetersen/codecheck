@@ -1,0 +1,87 @@
+Research Software Engineering Review
+
+Review this repository as **research software**, prioritizing scientific correctness, reproducibility, and clarity of methodology over commercial software conventions. Provide a structured report covering:
+
+## 1. **Reproducibility & Computational Environment**
+Can an independent researcher clone this repo and reproduce the results end-to-end?
+- Are dependencies fully pinned (exact versions, not just ranges)?
+- Is the computational environment specified (e.g., `environment.yml`, `Dockerfile`, `renv.lock`, Nix flake)?
+- Are random seeds set and propagated where stochastic methods are used?
+- Are data inputs either included, programmatically downloaded, or clearly documented with persistent identifiers (DOIs, checksums)?
+- Is there a single entry point or clearly documented workflow to go from raw data → processed results → figures/tables?
+
+## 2. **Scientific Correctness & Numerical Integrity**
+Could the implementation silently produce wrong results?
+- Do key algorithms match their cited references? Are equation numbers or paper sections referenced in comments?
+- Are units, coordinate systems, and conventions documented and consistent throughout?
+- Are there risks of numerical instability (e.g., catastrophic cancellation, overflow, division near zero, loss of significance)?
+- Are edge cases and domain constraints validated (e.g., probabilities summing to 1, physical quantities remaining non-negative)?
+- Are approximations, simplifications, or known limitations explicitly documented?
+
+## 3. **Configuration & Experiment Management**
+Can experiments be varied without modifying source code?
+- Are scientific parameters (hyperparameters, physical constants, thresholds) separated from logic — not buried as magic numbers in the code?
+- Is there a clear configuration system (config files, CLI arguments, parameter files)?
+- Are experiment configurations versioned or logged alongside outputs?
+- Can you tell, for any result file, exactly what parameters and code version produced it?
+
+## 4. **Code Clarity & Research Readability**
+Could a domain expert (not necessarily a software engineer) understand the methodology by reading the code?
+- Do variable names reflect domain terminology (not generic names like `x1`, `tmp`, `data2`)?
+- Are complex derivations, non-obvious algorithmic choices, or field-specific conventions explained in comments or docstrings?
+- Is the overall pipeline structure legible — can you follow the scientific workflow from entry point to output?
+- Is there meaningful separation between data loading/preprocessing, core methodology, analysis, and visualization?
+
+## 5. **Validation & Testing**
+Is there evidence the code does what it claims?
+- Are there validation tests against known analytical solutions, published benchmarks, or reference implementations?
+- Are regression tests in place to catch when results change unexpectedly?
+- For statistical or stochastic code, are there distributional or property-based checks?
+- Are test datasets or toy problems included that run quickly and verify core logic?
+- _Note: Line-level unit test coverage percentage matters far less here than having tests that verify scientific claims._
+
+## 6. **Data Provenance & Output Traceability**
+Can you trace any result back to its source data and methodology?
+- Are intermediate data transformations documented or logged?
+- Do output files embed or reference the parameters, code version, and input data that produced them?
+- Are file formats well-documented or self-describing (e.g., NetCDF with metadata, HDF5 with attributes, CSV with header comments)?
+- Is there a clear separation between immutable input data and generated artifacts?
+
+## 7. **Documentation & Scholarly Context**
+Does the repository connect the code to its scientific context?
+- Is there a README that explains the scientific purpose, not just installation steps?
+- Are the associated publication(s), preprint(s), or method references cited?
+- Is there a `CITATION.cff` or equivalent so others can cite the software?
+- Are licensing terms clear and compatible with dependencies?
+- Is there enough methodological documentation that a new lab member or collaborator could onboard?
+
+## 8. **Robustness & Defensive Practice**
+Will the code fail loudly rather than produce silently wrong results?
+- Are inputs validated with informative error messages (e.g., "Expected 3D array of shape (time, lat, lon), got shape ...")?
+- Does the code fail fast on inconsistent or unexpected data rather than propagating garbage?
+- Are warnings or logs emitted for edge cases that don't warrant a hard failure but could affect interpretation?
+- Are file I/O operations guarded (missing files, permissions, disk space)?
+
+---
+
+**For each area, rate it:**
+- 🟢 **Solid** — Meets research software standards; only minor suggestions.
+- 🟡 **Needs Attention** — Functional but poses a meaningful risk to reproducibility, correctness, or reuse.
+- 🔴 **Critical Risk** — Could lead to irreproducible results, silent errors, or major barriers to reuse.
+
+**Provide specific file and line references. Prioritize findings by scientific risk — a hardcoded random seed that's missing matters more than an inconsistent naming convention. Focus recommendations on changes that protect the integrity of the research first, and improve code elegance second.**
+
+---
+
+## Key shifts from the original
+
+| Original Focus | Research Software Focus |
+|---|---|
+| Architecture & design patterns | Pipeline clarity & workflow legibility |
+| Dependency freshness / latest versions | Dependency **pinning** / exact reproducibility |
+| Test coverage percentage | Validation against known scientific results |
+| Error handling patterns | **Fail-loud** to prevent silent wrong results |
+| Self-documenting code | Domain-readable code + scholarly context |
+| Generic "best practices" | Traceable, reproducible, scientifically defensible |
+
+The fundamental reframe: in production software, a bug causes a crash or a bad user experience. In research software, **a bug causes a wrong paper**. The review criteria should reflect that hierarchy.
