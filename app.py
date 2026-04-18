@@ -2,8 +2,10 @@
 """codecheck - A code review web app powered by Claude Code."""
 
 import asyncio
+import functools
 import html
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -11,6 +13,8 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger("codecheck")
 
 try:
     from dotenv import load_dotenv
@@ -25,7 +29,15 @@ from fastapi.staticfiles import StaticFiles
 app = FastAPI(title="codecheck")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
-# Persistent directory for Claude-created files (survives session expiry, cleared after 30 days or on /tmp wipe)
+# Retention / limits
+SESSION_TTL_SECS = 2 * 60 * 60             # keep repo clones for 2 hours
+FILE_RETENTION_DAYS = 30                   # persist Claude-created files for 30 days
+REPO_CONTEXT_MAX_BYTES = 200_000           # SDK fallback: cap repo dump at 200 KB
+BROWSER_FILE_MAX_BYTES = 200_000           # /browse: truncate file view at 200 KB
+CLAUDE_CLI_READ_TIMEOUT_SECS = 300         # 5-minute idle timeout on CLI output
+SHARE_ID_MAX_LEN = 20
+
+# Persistent directory for Claude-created files (survives session expiry, cleared after FILE_RETENTION_DAYS or on /tmp wipe)
 _FILES_BASE = Path(tempfile.gettempdir()) / "codecheck_files"
 _FILES_BASE.mkdir(exist_ok=True)
 
@@ -36,8 +48,13 @@ _known_files: dict[str, set[str]] = {}
 _sessions: dict[str, dict] = {}
 
 
-def _cleanup_sessions(max_age_secs: int = 7200):
-    """Remove repo clone sessions older than max_age_secs (default 2 hours)."""
+def _valid_share_id(share_id: str) -> bool:
+    """Share IDs are hex-only and short — reject anything else to prevent traversal."""
+    return share_id.isalnum() and 0 < len(share_id) <= SHARE_ID_MAX_LEN
+
+
+def _cleanup_sessions(max_age_secs: int = SESSION_TTL_SECS):
+    """Remove repo clone sessions older than max_age_secs."""
     now = time.time()
     expired = [sid for sid, s in _sessions.items() if now - s.get("created", 0) > max_age_secs]
     for sid in expired:
@@ -48,12 +65,29 @@ def _cleanup_sessions(max_age_secs: int = 7200):
         _known_files.pop(sid, None)
 
 
-def _cleanup_file_dirs(max_age_days: int = 30):
-    """Remove persistent file dirs older than max_age_days."""
+def _cleanup_file_dirs(max_age_days: int = FILE_RETENTION_DAYS):
+    """Remove persistent file dirs and share metadata older than max_age_days."""
     cutoff = time.time() - max_age_days * 86400
+    shares_dir = _FILES_BASE / "shares"
     for d in _FILES_BASE.iterdir():
-        if d.is_dir() and d.stat().st_mtime < cutoff:
+        try:
+            mtime = d.stat().st_mtime
+        except OSError:
+            continue
+        if mtime >= cutoff:
+            continue
+        if d.is_dir():
             shutil.rmtree(d, ignore_errors=True)
+    # Reap orphaned share metadata files (shares/<id>.md, .meta, .files.json)
+    if shares_dir.is_dir():
+        for f in shares_dir.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 REPO_ROOT = Path(__file__).parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -132,8 +166,12 @@ def resolve_repo_url(raw: str) -> str:
     return raw
 
 
+@functools.lru_cache(maxsize=1)
 def get_claude_bin() -> str | None:
-    """Return path to claude CLI, or None if not found or inside Claude Code."""
+    """Return path to claude CLI, or None if not found or inside Claude Code.
+
+    Cached for process lifetime — the binary location does not change at runtime.
+    """
     if os.environ.get("CLAUDECODE"):
         return None
     # Prefer ~/.local/bin (standard user install location, may not be in PATH)
@@ -141,25 +179,81 @@ def get_claude_bin() -> str | None:
         candidate = Path.home() / d / "claude"
         if candidate.is_file():
             return str(candidate)
-    found = shutil.which("claude")
-    if found:
-        return found
-    return None
+    return shutil.which("claude")
+
+
+_GH_AUTH_CACHE: dict = {"ts": 0.0, "value": False}
+_GH_AUTH_TTL_SECS = 60
 
 
 def check_gh_auth() -> bool:
-    """Return True if gh CLI is installed and authenticated."""
+    """Return True if gh CLI is installed and authenticated. Cached for _GH_AUTH_TTL_SECS."""
+    now = time.time()
+    if now - _GH_AUTH_CACHE["ts"] < _GH_AUTH_TTL_SECS:
+        return _GH_AUTH_CACHE["value"]
     gh = shutil.which("gh")
-    if not gh:
-        return False
-    try:
-        result = subprocess.run(
-            [gh, "auth", "status"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    ok = False
+    if gh:
+        try:
+            result = subprocess.run(
+                [gh, "auth", "status"],
+                capture_output=True, text=True, timeout=10,
+            )
+            ok = result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            ok = False
+    _GH_AUTH_CACHE["ts"] = now
+    _GH_AUTH_CACHE["value"] = ok
+    return ok
+
+
+def _handle_cli_event(event: dict):
+    """Translate one stream-json event into zero or more SSE events."""
+    etype = event.get("type")
+    if etype == "assistant":
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") == "text" and block.get("text"):
+                yield _sse_event("chunk", block["text"])
+            elif block.get("type") == "tool_use":
+                tool = block.get("name", "")
+                inp = block.get("input", {})
+                detail = (
+                    inp.get("file_path")
+                    or inp.get("command")
+                    or inp.get("pattern")
+                    or inp.get("query")
+                    or ""
+                )
+                label = f"**[{tool}]** {detail}\n" if detail else f"**[{tool}]**\n"
+                yield _sse_event("chunk", label)
+    elif etype == "user":
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") != "tool_result":
+                continue
+            raw = block.get("content", "") or block.get("output", "")
+            if isinstance(raw, list):
+                raw = "\n".join(
+                    b.get("text", "") for b in raw if b.get("type") == "text"
+                )
+            if raw and isinstance(raw, str):
+                lines = raw.strip().splitlines()
+                preview = lines[0][:160] if lines else ""
+                suffix = f" _…({len(lines)} lines)_" if len(lines) > 1 else ""
+                yield _sse_event("chunk", f"  ↳ {preview}{suffix}\n")
+    elif etype == "result":
+        result_text = event.get("result", "")
+        if result_text and isinstance(result_text, str):
+            yield _sse_event("report", result_text)
+
+
+async def _drain_to_buffer(stream, buf: bytearray, max_bytes: int = 65536):
+    """Concurrently read a pipe into a bounded buffer so it can't fill and block the child."""
+    while True:
+        chunk = await stream.read(4096)
+        if not chunk:
+            return
+        if len(buf) < max_bytes:
+            buf.extend(chunk[: max_bytes - len(buf)])
 
 
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
@@ -187,69 +281,65 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         env=env,
     )
 
-    line_buf = ""
+    stderr_buf = bytearray()
+    stderr_task = asyncio.create_task(_drain_to_buffer(proc.stderr, stderr_buf))
+
     try:
         while True:
-            chunk = await asyncio.wait_for(proc.stdout.read(256), timeout=300)
-            if not chunk:
+            try:
+                line = await asyncio.wait_for(
+                    proc.stdout.readline(), timeout=CLAUDE_CLI_READ_TIMEOUT_SECS
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                yield _sse_event(
+                    "error",
+                    f"Claude CLI timed out after {CLAUDE_CLI_READ_TIMEOUT_SECS // 60} minutes.",
+                )
+                return
+            if not line:
                 break
-            line_buf += chunk.decode("utf-8", errors="replace")
-            while "\n" in line_buf:
-                line, line_buf = line_buf.split("\n", 1)
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                etype = event.get("type")
-                if etype == "assistant":
-                    for block in event.get("message", {}).get("content", []):
-                        if block.get("type") == "text" and block.get("text"):
-                            yield _sse_event("chunk", block["text"])
-                        elif block.get("type") == "tool_use":
-                            tool = block.get("name", "")
-                            inp = block.get("input", {})
-                            detail = (
-                                inp.get("file_path")
-                                or inp.get("command")
-                                or inp.get("pattern")
-                                or inp.get("query")
-                                or ""
-                            )
-                            label = f"**[{tool}]** {detail}\n" if detail else f"**[{tool}]**\n"
-                            yield _sse_event("chunk", label)
-                elif etype == "user":
-                    for block in event.get("message", {}).get("content", []):
-                        if block.get("type") != "tool_result":
-                            continue
-                        raw = block.get("content", "") or block.get("output", "")
-                        if isinstance(raw, list):
-                            raw = "\n".join(
-                                b.get("text", "") for b in raw if b.get("type") == "text"
-                            )
-                        if raw and isinstance(raw, str):
-                            lines = raw.strip().splitlines()
-                            preview = lines[0][:160] if lines else ""
-                            suffix = f" _…({len(lines)} lines)_" if len(lines) > 1 else ""
-                            yield _sse_event("chunk", f"  ↳ {preview}{suffix}\n")
-                elif etype == "result":
-                    result_text = event.get("result", "")
-                    if result_text and isinstance(result_text, str):
-                        yield _sse_event("report", result_text)
-    except asyncio.TimeoutError:
-        proc.kill()
-        yield _sse_event("error", "Claude CLI timed out after 5 minutes.")
-        return
+            line = line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for sse in _handle_cli_event(event):
+                yield sse
 
-    await proc.wait()
+        await proc.wait()
+        await stderr_task
 
-    if proc.returncode != 0:
-        stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")
-        yield _sse_event("error", f"Claude CLI exited with code {proc.returncode}: {stderr[:500]}")
-    else:
-        yield _sse_event("done", "")
+        if proc.returncode != 0:
+            stderr = bytes(stderr_buf).decode("utf-8", errors="replace")
+            yield _sse_event(
+                "error", f"Claude CLI exited with code {proc.returncode}: {stderr[:500]}"
+            )
+        else:
+            yield _sse_event("done", "")
+    finally:
+        stderr_task.cancel()
+
+
+def _sdk_client_and_model(anthropic_mod, use_opus: bool) -> tuple[object, str, str]:
+    """Return (client, model, backend_label) for the active SDK backend."""
+    model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
+    if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
+        default = "claude-opus-4-7" if use_opus else "claude-sonnet-4-6"
+        base_url = os.environ.get("ANTHROPIC_FOUNDRY_BASE_URL", "").rstrip("/")
+        client = anthropic_mod.Anthropic(
+            base_url=f"{base_url}/anthropic/v1/",
+            api_key=os.environ.get("ANTHROPIC_FOUNDRY_API_KEY", ""),
+        )
+        return client, os.environ.get(model_key, default), "Azure"
+    default = "global.anthropic.claude-opus-4-7" if use_opus else "global.anthropic.claude-sonnet-4-6"
+    client = anthropic_mod.AnthropicBedrock(
+        aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
+        aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
+    )
+    return client, os.environ.get(model_key, default), "Bedrock"
 
 
 async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
@@ -262,26 +352,9 @@ async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
 
     context = _build_repo_context(repo_dir)
     full_prompt = f"{prompt}\n\n---\n\nRepository contents:\n\n{context}"
+    backend = "Bedrock"
     try:
-        if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
-            # Azure AI Foundry: Anthropic-compatible endpoint
-            model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            default = "claude-opus-4-7" if use_opus else "claude-sonnet-4-6"
-            model = os.environ.get(model_key, default)
-            base_url = os.environ.get("ANTHROPIC_FOUNDRY_BASE_URL", "").rstrip("/")
-            client = anthropic.Anthropic(
-                base_url=f"{base_url}/anthropic/v1/",
-                api_key=os.environ.get("ANTHROPIC_FOUNDRY_API_KEY", ""),
-            )
-        else:
-            model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            default = "global.anthropic.claude-opus-4-7" if use_opus else "global.anthropic.claude-sonnet-4-6"
-            model = os.environ.get(model_key, default)
-            client = anthropic.AnthropicBedrock(
-                aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
-                aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
-            )
-
+        client, model, backend = _sdk_client_and_model(anthropic, use_opus)
         with client.messages.stream(
             model=model,
             max_tokens=8192,
@@ -291,11 +364,10 @@ async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
                 yield _sse_event("chunk", text)
         yield _sse_event("done", "")
     except Exception as e:
-        backend = "Azure" if os.environ.get("AZURE_AI_FOUNDRY") else "Bedrock"
         yield _sse_event("error", f"{backend} error: {e}")
 
 
-def _build_repo_context(repo_dir: str, max_bytes: int = 200_000) -> str:
+def _build_repo_context(repo_dir: str, max_bytes: int = REPO_CONTEXT_MAX_BYTES) -> str:
     """Read text files from repo into a single context string."""
     extensions = {
         ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".c", ".cpp", ".h",
@@ -354,7 +426,8 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
         r = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
                            cwd=repo_dir, timeout=10)
         tracked = set(r.stdout.strip().splitlines()) if r.returncode == 0 else set()
-    except Exception:
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning("git ls-files failed in %s: %s", repo_dir, e)
         tracked = set()
 
     already_known = _known_files.get(session_id, set())
@@ -376,8 +449,8 @@ def _collect_output_files(repo_dir: str, session_id: str) -> dict[str, str]:
             dest = _FILES_BASE / session_id / rel_str
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content, encoding="utf-8")
-        except Exception:
-            pass
+        except OSError as e:
+            logger.warning("failed to persist %s: %s", rel_str, e)
 
     if new_files:
         _known_files.setdefault(session_id, set()).update(new_files)
@@ -740,7 +813,7 @@ async def get_file(session_id: str, filename: str):
         return HTMLResponse("<h2>File not found or session expired.</h2>", status_code=404)
     session_dir = (_FILES_BASE / session_id).resolve()
     file_path = (session_dir / filename).resolve()
-    if not str(file_path).startswith(str(session_dir) + os.sep):
+    if not file_path.is_relative_to(session_dir):
         return HTMLResponse("<h2>Invalid path.</h2>", status_code=400)
     if not file_path.is_file():
         return HTMLResponse("<h2>File not found or session expired.</h2>", status_code=404)
@@ -784,7 +857,7 @@ async def share_report(request: Request):
         session_id, fname = parts[0], parts[1]
         src = (_FILES_BASE / session_id / fname).resolve()
         session_dir = (_FILES_BASE / session_id).resolve()
-        if not str(src).startswith(str(session_dir) + os.sep) or not src.is_file():
+        if not src.is_relative_to(session_dir) or not src.is_file():
             continue
         dest_dir = shares_dir / share_id
         dest_dir.mkdir(exist_ok=True)
@@ -805,8 +878,7 @@ async def share_report(request: Request):
 @app.get("/share/{share_id}", response_class=HTMLResponse)
 async def get_share(share_id: str):
     """Serve a shared report as a rendered HTML page."""
-    # Validate share_id format (hex only, prevent traversal)
-    if not share_id.isalnum() or len(share_id) > 20:
+    if not _valid_share_id(share_id):
         return HTMLResponse("<h2>Invalid share link.</h2>", status_code=400)
     shares_dir = _FILES_BASE / "shares"
     share_path = shares_dir / f"{share_id}.md"
@@ -839,8 +911,8 @@ async def get_share(share_id: str):
                     f'letter-spacing:.04em;text-transform:uppercase;margin-right:8px">Files</span>'
                     f'{chips}</div>'
                 )
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError, KeyError) as e:
+            logger.warning("failed to load share files for %s: %s", share_id, e)
 
     page = (_FILE_VIEWER
             .replace("PLACEHOLDER_FILENAME", safe_title)
@@ -857,11 +929,11 @@ async def get_share(share_id: str):
 @app.get("/share/{share_id}/file/{filename:path}", response_class=HTMLResponse)
 async def get_shared_file(share_id: str, filename: str):
     """Serve a file attached to a shared report."""
-    if not share_id.isalnum() or len(share_id) > 20:
+    if not _valid_share_id(share_id):
         return HTMLResponse("<h2>Invalid share link.</h2>", status_code=400)
     share_dir = (_FILES_BASE / "shares" / share_id).resolve()
     file_path = (share_dir / filename).resolve()
-    if not str(file_path).startswith(str(share_dir) + os.sep) or not file_path.is_file():
+    if not file_path.is_relative_to(share_dir) or not file_path.is_file():
         return HTMLResponse("<h2>File not found.</h2>", status_code=404)
     content = file_path.read_text(encoding="utf-8", errors="replace")
     safe_filename = html.escape(filename)
@@ -920,17 +992,16 @@ async def browse_repo(session_id: str, path: str = ""):
         data: dict = {"type": "dir", "session_id": session_id, "rel_path": rel_path, "entries": entries}
 
     elif target.is_file():
-        MAX = 200_000
         try:
             raw = target.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
+        except OSError as e:
             return HTMLResponse(
                 f"<html><body style='background:#0d1117;color:#e6edf3;font-family:monospace;padding:40px'>"
                 f"<h2>Cannot read file</h2><p>{html.escape(str(e))}</p></body></html>",
                 status_code=500,
             )
-        truncated = len(raw) > MAX
-        text = raw[:MAX] if truncated else raw
+        truncated = len(raw) > BROWSER_FILE_MAX_BYTES
+        text = raw[:BROWSER_FILE_MAX_BYTES] if truncated else raw
         ext = target.suffix.lstrip(".") or ""
         data = {
             "type": "file", "session_id": session_id, "rel_path": rel_path,
