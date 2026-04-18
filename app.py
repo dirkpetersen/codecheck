@@ -275,7 +275,7 @@ async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
             )
         else:
             model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            default = "global.anthropic.claude-opus-4-7-v1" if use_opus else "global.anthropic.claude-sonnet-4-6"
+            default = "global.anthropic.claude-opus-4-7" if use_opus else "global.anthropic.claude-sonnet-4-6"
             model = os.environ.get(model_key, default)
             client = anthropic.AnthropicBedrock(
                 aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
