@@ -314,9 +314,17 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
 
         if proc.returncode != 0:
             stderr = bytes(stderr_buf).decode("utf-8", errors="replace")
-            yield _sse_event(
-                "error", f"Claude CLI exited with code {proc.returncode}: {stderr[:500]}"
-            )
+            # 143 = 128+SIGTERM: the process was killed externally (typically systemd
+            # hitting the cgroup memory cap). Surface a clearer hint than the raw code.
+            if proc.returncode == 143:
+                msg = ("Claude CLI was killed (SIGTERM), likely due to a memory limit "
+                       "on the service cgroup. Try a smaller repository or raise "
+                       "MemoryMax on the systemd unit.")
+                yield _sse_event("error", f"{msg} {stderr[:500]}".strip())
+            else:
+                yield _sse_event(
+                    "error", f"Claude CLI exited with code {proc.returncode}: {stderr[:500]}"
+                )
         else:
             yield _sse_event("done", "")
     finally:
