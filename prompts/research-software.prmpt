@@ -71,17 +71,3 @@ Will the code fail loudly rather than produce silently wrong results?
 
 **Provide specific file and line references. Prioritize findings by scientific risk — a hardcoded random seed that's missing matters more than an inconsistent naming convention. Focus recommendations on changes that protect the integrity of the research first, and improve code elegance second.**
 
----
-
-## Key shifts from the original
-
-| Original Focus | Research Software Focus |
-|---|---|
-| Architecture & design patterns | Pipeline clarity & workflow legibility |
-| Dependency freshness / latest versions | Dependency **pinning** / exact reproducibility |
-| Test coverage percentage | Validation against known scientific results |
-| Error handling patterns | **Fail-loud** to prevent silent wrong results |
-| Self-documenting code | Domain-readable code + scholarly context |
-| Generic "best practices" | Traceable, reproducible, scientifically defensible |
-
-The fundamental reframe: in production software, a bug causes a crash or a bad user experience. In research software, **a bug causes a wrong paper**. The review criteria should reflect that hierarchy.
