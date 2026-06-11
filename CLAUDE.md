@@ -21,6 +21,23 @@ On submit:
 - Keep the session alive (repo clone + Claude context) for up to 2 hours to support follow-up questions
 - If `gh` CLI is authenticated, offer a button to file results as a GitHub issue
 - Reports can be shared via `/api/share` → `/share/{share_id}` (persisted in `_FILES_BASE/shares/`)
+- The live clone can be explored at `/browse/{session_id}/{path}` — a server-rendered file browser (directory listings + syntax-highlighted file view, truncated at `BROWSER_FILE_MAX_BYTES`); only works while the session is alive
+
+## HTTP Routes
+
+| Route | Purpose |
+|-------|---------|
+| `GET /` | Single-page app (`static/index.html`) |
+| `GET /api/version`, `/api/prompts`, `/api/gh-auth` | Build/commit info, prompt templates, gh auth state |
+| `POST /api/evaluate` | Clone + initial analysis (SSE stream) |
+| `POST /api/followup` | Follow-up question in the same session (SSE stream) |
+| `POST /api/file-issue` | Create a GitHub issue from a report via `gh issue create` |
+| `POST /api/share` → `GET /share/{id}`, `/share/{id}/file/{path}` | Persist & serve a shareable report + attached files |
+| `GET /api/files/{session_id}/{path}` | Serve a Claude-created `.md` file (session must be live) |
+| `GET /browse/{session_id}/{path}` | File browser over the cloned repo |
+| `DELETE /api/session/{session_id}` | Eagerly tear down a session's clone and files |
+
+Path-traversal defenses recur throughout: `_valid_share_id` (alnum-only), and `Path.resolve()` + `is_relative_to(base)` checks before serving any user-supplied path. Preserve these when touching file-serving routes. The three HTML responses are built by string-substituting into `_FILE_VIEWER` / `_BROWSER_PAGE` templates with `_safe_json_for_html` (escapes `</` to prevent `</script>` breakout) — not a template engine.
 
 ## Tech Stack
 
@@ -37,12 +54,17 @@ On submit:
 # Install dependencies
 pip install -r requirements.txt
 
+# Configure (optional) — app.py calls load_dotenv() on startup
+cp .env.default .env        # edit as needed
+
 # Run dev server (auto-reload)
 python app.py
 # or: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
 # App is served at http://localhost:8000
 ```
+
+There are no tests, linters, or build steps — this is a single-module FastAPI app plus a static HTML page. `.env.default` documents every supported environment variable (see table below).
 
 ## Project Structure
 
@@ -51,8 +73,8 @@ app.py                  # FastAPI backend (routes, Claude invocation, SSE stream
 static/index.html       # Single-page frontend (dark UI, markdown rendering)
 prompts/*.prmpt         # Shipped prompt templates
 ~/.codecheck/prompts/   # User-local prompt templates (merged at runtime)
-requirements.txt        # Python dependencies
-claude-skills/          # Symlink to sibling repo with Claude invocation reference code
+requirements.txt        # Python dependencies (fastapi, uvicorn, anthropic)
+.env.default            # Annotated template for all supported env vars
 ```
 
 ## Invoking Claude from Python
@@ -60,7 +82,7 @@ claude-skills/          # Symlink to sibling repo with Claude invocation referen
 The app uses a two-tier fallback:
 
 ### Tier 1: Claude CLI via subprocess (always preferred when installed)
-The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Initial evals use `--model sonnet`, follow-ups use `--model opus` with `--continue` (resumes prior CLI session). Two event types carry content:
+The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Initial evals (the code review) use `--model fable`, follow-ups use `--model opus` with `--continue` (resumes prior CLI session). Two event types carry content:
 - `assistant` events: iterate `message.content[]` for `type=="text"` blocks
 - `result` events: read the top-level `result` string
 
@@ -71,7 +93,7 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ```
 
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
-`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. Initial evals use Sonnet (`ANTHROPIC_DEFAULT_SONNET_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
+`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: initial evals use Fable (`ANTHROPIC_DEFAULT_FABLE_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
@@ -85,8 +107,9 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
 | `ANTHROPIC_API_KEY` | Auth option 1 — Anthropic API key (used directly by CLI and SDK) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model for follow-ups (Bedrock: `global.anthropic.claude-opus-4-7`, Foundry: `claude-opus-4-7`) |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model for initial eval (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model for initial eval / code review (Bedrock: `global.anthropic.claude-fable-5`, Foundry: `claude-fable-5`) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model for follow-ups (Bedrock: `global.anthropic.claude-opus-4-8`, Foundry: `claude-opus-4-8`) |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
 | `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |
 | `AWS_DEFAULT_REGION` | Bedrock region (default: `us-west-2`) |

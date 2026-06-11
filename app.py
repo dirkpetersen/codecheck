@@ -259,7 +259,8 @@ async def _drain_to_buffer(stream, buf: bytearray, max_bytes: int = 65536):
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                             continue_conversation: bool = False):
     """Run claude CLI in batch mode, streaming output via stream-json format."""
-    model = "opus" if continue_conversation else "sonnet"
+    # Initial code review defaults to Fable; follow-ups use Opus (resumes prior session).
+    model = "opus" if continue_conversation else "fable"
     cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
            "--dangerously-skip-permissions"]
     if continue_conversation:
@@ -331,27 +332,48 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         stderr_task.cancel()
 
 
-def _sdk_client_and_model(anthropic_mod, use_opus: bool) -> tuple[object, str, str]:
-    """Return (client, model, backend_label) for the active SDK backend."""
-    model_key = "ANTHROPIC_DEFAULT_OPUS_MODEL" if use_opus else "ANTHROPIC_DEFAULT_SONNET_MODEL"
+_SDK_MODEL_ENV = {
+    "fable": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+}
+_SDK_DEFAULTS_BEDROCK = {
+    "fable": "global.anthropic.claude-fable-5",
+    "opus": "global.anthropic.claude-opus-4-8",
+    "sonnet": "global.anthropic.claude-sonnet-4-6",
+}
+_SDK_DEFAULTS_FOUNDRY = {
+    "fable": "claude-fable-5",
+    "opus": "claude-opus-4-8",
+    "sonnet": "claude-sonnet-4-6",
+}
+
+
+def _sdk_client_and_model(anthropic_mod, tier: str) -> tuple[object, str, str]:
+    """Return (client, model, backend_label) for the active SDK backend.
+
+    tier is one of "fable", "opus", "sonnet".
+    """
+    model_key = _SDK_MODEL_ENV[tier]
     if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
-        default = "claude-opus-4-7" if use_opus else "claude-sonnet-4-6"
         base_url = os.environ.get("ANTHROPIC_FOUNDRY_BASE_URL", "").rstrip("/")
         client = anthropic_mod.Anthropic(
             base_url=f"{base_url}/anthropic/v1/",
             api_key=os.environ.get("ANTHROPIC_FOUNDRY_API_KEY", ""),
         )
-        return client, os.environ.get(model_key, default), "Azure"
-    default = "global.anthropic.claude-opus-4-7" if use_opus else "global.anthropic.claude-sonnet-4-6"
+        return client, os.environ.get(model_key, _SDK_DEFAULTS_FOUNDRY[tier]), "Azure"
     client = anthropic_mod.AnthropicBedrock(
         aws_profile=os.environ.get("AWS_PROFILE", "codecheck"),
         aws_region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
     )
-    return client, os.environ.get(model_key, default), "Bedrock"
+    return client, os.environ.get(model_key, _SDK_DEFAULTS_BEDROCK[tier]), "Bedrock"
 
 
-async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
-    """Fallback when Claude CLI is unavailable: use Anthropic SDK via Bedrock or Azure."""
+async def stream_sdk(prompt: str, repo_dir: str, tier: str = "fable"):
+    """Fallback when Claude CLI is unavailable: use Anthropic SDK via Bedrock or Azure.
+
+    tier selects the model: "fable" (initial review), "opus" (follow-ups), or "sonnet".
+    """
     try:
         import anthropic
     except ImportError:
@@ -362,7 +384,7 @@ async def stream_sdk(prompt: str, repo_dir: str, use_opus: bool = False):
     full_prompt = f"{prompt}\n\n---\n\nRepository contents:\n\n{context}"
     backend = "Bedrock"
     try:
-        client, model, backend = _sdk_client_and_model(anthropic, use_opus)
+        client, model, backend = _sdk_client_and_model(anthropic, tier)
         with client.messages.stream(
             model=model,
             max_tokens=8192,
@@ -765,7 +787,7 @@ async def followup(request: Request):
         else:
             # SDK fallback has no memory, so include preamble
             full_prompt = _PREAMBLE + prompt
-            async for event in stream_sdk(full_prompt, repo_dir, use_opus=True):
+            async for event in stream_sdk(full_prompt, repo_dir, tier="opus"):
                 yield event
 
         # Collect any new .md files from this follow-up
