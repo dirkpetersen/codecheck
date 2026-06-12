@@ -34,7 +34,7 @@ SESSION_TTL_SECS = 2 * 60 * 60             # keep repo clones for 2 hours
 FILE_RETENTION_DAYS = 30                   # persist Claude-created files for 30 days
 REPO_CONTEXT_MAX_BYTES = 200_000           # SDK fallback: cap repo dump at 200 KB
 BROWSER_FILE_MAX_BYTES = 200_000           # /browse: truncate file view at 200 KB
-CLAUDE_CLI_READ_TIMEOUT_SECS = 300         # 5-minute idle timeout on CLI output
+CLAUDE_CLI_READ_TIMEOUT_SECS = 1800        # 30-minute idle timeout on CLI output
 SHARE_ID_MAX_LEN = 20
 
 # Persistent directory for Claude-created files (survives session expiry, cleared after FILE_RETENTION_DAYS or on /tmp wipe)
