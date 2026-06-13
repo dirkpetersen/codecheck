@@ -772,7 +772,7 @@ async def run_initial_analysis(full_prompt: str, repo_dir: str):
     yield _sse_event("status", "Checking model availability...")
     # The probe makes blocking SDK calls — run it off the event loop.
     tier = await asyncio.to_thread(_pick_available_tier)
-    yield _sse_event("status", f"Analyzing with {_MODEL_LABELS[tier]}...")
+    yield _sse_event("status", f"Analysing with Claude {_MODEL_LABELS[tier]}...")
 
     claude_bin = get_claude_bin()
     if claude_bin:
