@@ -95,6 +95,9 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
 `stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: initial evals use Fable (`ANTHROPIC_DEFAULT_FABLE_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
+### Model fallback (initial review)
+The initial code review starts on **Fable** and is orchestrated by `run_initial_analysis`, which emits a `status` SSE announcing the model in use (`Analyzing with Fable...`). If the underlying call (CLI or SDK) fails with a genuine **HTTP 5xx** server-side error, it automatically retries the same prompt on **Opus** and announces the switch. The 5xx detection lives in `_is_server_error` (matches explicit `5xx` codes and named Bedrock/Anthropic server faults like `ServiceUnavailable`, `Overloaded`); throttling/4xx (e.g. `429`) is deliberately **not** treated as a server error and does not trigger fallback. Both `stream_claude_cli` and `stream_sdk` accept an `err_state` dict — on a 5xx they record `err_state["server_error"]` instead of emitting a terminal `error` SSE, letting the orchestrator fall back cleanly.
+
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
 ```python

@@ -7,6 +7,7 @@ import html
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -257,10 +258,18 @@ async def _drain_to_buffer(stream, buf: bytearray, max_bytes: int = 65536):
 
 
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
-                            continue_conversation: bool = False):
-    """Run claude CLI in batch mode, streaming output via stream-json format."""
+                            continue_conversation: bool = False,
+                            model: str | None = None, err_state: dict | None = None):
+    """Run claude CLI in batch mode, streaming output via stream-json format.
+
+    If a genuine HTTP 5xx (server-side) failure is detected and ``err_state`` is
+    provided, the failure is recorded as ``err_state["server_error"]`` and no
+    terminal ``error`` SSE is emitted — letting the caller fall back to another
+    model. All other failures emit an ``error`` event as before.
+    """
     # Initial code review defaults to Fable; follow-ups use Opus (resumes prior session).
-    model = "opus" if continue_conversation else "fable"
+    if model is None:
+        model = "opus" if continue_conversation else "fable"
     cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
            "--dangerously-skip-permissions"]
     if continue_conversation:
@@ -322,6 +331,10 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                        "on the service cgroup. Try a smaller repository or raise "
                        "MemoryMax on the systemd unit.")
                 yield _sse_event("error", f"{msg} {stderr[:500]}".strip())
+            elif err_state is not None and _is_server_error(stderr):
+                # Transient server-side (5xx) failure — let the caller retry on another
+                # model instead of surfacing a terminal error to the browser.
+                err_state["server_error"] = stderr[:500].strip()
             else:
                 yield _sse_event(
                     "error", f"Claude CLI exited with code {proc.returncode}: {stderr[:500]}"
@@ -349,6 +362,36 @@ _SDK_DEFAULTS_FOUNDRY = {
 }
 
 
+# Names of genuine HTTP 5xx (server-side) failures, as they appear in Bedrock /
+# Anthropic CLI stderr or SDK exception messages. Used to decide when to fall back
+# from Fable to Opus. 429/Throttling is deliberately excluded (client-side, < 500).
+_SERVER_ERROR_NAMES = (
+    "InternalServerError", "ServiceUnavailable", "ServiceException",
+    "ModelErrorException", "Bad Gateway", "Gateway Timeout",
+    "Overloaded", "overloaded_error",
+)
+
+
+def _is_server_error(text: str = "", status_code: int | None = None) -> bool:
+    """True if a status code or message indicates an HTTP 5xx (server-side) failure.
+
+    Such failures are transient and worth retrying on a different model. A 429/4xx
+    (throttling, bad request) is not treated as a server error.
+    """
+    if status_code is not None:
+        return status_code >= 500
+    if not text:
+        return False
+    # Explicit 5xx codes appearing near status/error/http wording, e.g.
+    # "status 503", "Error code: 529", "HTTP 500 Internal Server Error".
+    if re.search(r"\b5\d{2}\b", text) and re.search(
+        r"status|code|error|http|api", text, re.IGNORECASE
+    ):
+        return True
+    lowered = text.lower()
+    return any(name.lower() in lowered for name in _SERVER_ERROR_NAMES)
+
+
 def _sdk_client_and_model(anthropic_mod, tier: str) -> tuple[object, str, str]:
     """Return (client, model, backend_label) for the active SDK backend.
 
@@ -369,10 +412,15 @@ def _sdk_client_and_model(anthropic_mod, tier: str) -> tuple[object, str, str]:
     return client, os.environ.get(model_key, _SDK_DEFAULTS_BEDROCK[tier]), "Bedrock"
 
 
-async def stream_sdk(prompt: str, repo_dir: str, tier: str = "fable"):
+async def stream_sdk(prompt: str, repo_dir: str, tier: str = "fable",
+                     err_state: dict | None = None):
     """Fallback when Claude CLI is unavailable: use Anthropic SDK via Bedrock or Azure.
 
     tier selects the model: "fable" (initial review), "opus" (follow-ups), or "sonnet".
+
+    If a genuine HTTP 5xx (server-side) failure is detected and ``err_state`` is
+    provided, it is recorded as ``err_state["server_error"]`` without emitting a
+    terminal ``error`` SSE, so the caller can fall back to another model.
     """
     try:
         import anthropic
@@ -394,7 +442,11 @@ async def stream_sdk(prompt: str, repo_dir: str, tier: str = "fable"):
                 yield _sse_event("chunk", text)
         yield _sse_event("done", "")
     except Exception as e:
-        yield _sse_event("error", f"{backend} error: {e}")
+        status_code = getattr(e, "status_code", None)
+        if err_state is not None and _is_server_error(str(e), status_code):
+            err_state["server_error"] = f"{backend} error: {e}"[:500]
+        else:
+            yield _sse_event("error", f"{backend} error: {e}")
 
 
 def _build_repo_context(repo_dir: str, max_bytes: int = REPO_CONTEXT_MAX_BYTES) -> str:
@@ -695,6 +747,46 @@ async def get_gh_auth():
     return JSONResponse({"authenticated": check_gh_auth()})
 
 
+# Human-readable labels for the model tiers shown in the UI status line.
+_MODEL_LABELS = {"fable": "Fable", "opus": "Opus", "sonnet": "Sonnet"}
+
+
+async def run_initial_analysis(full_prompt: str, repo_dir: str):
+    """Run the initial code review, announcing the model and falling back Fable→Opus.
+
+    The review starts on Fable. If it fails with a genuine HTTP 5xx (server-side)
+    error, it automatically retries on Opus. The model in use is announced via a
+    ``status`` SSE so the user always knows which model produced the analysis.
+    """
+    claude_bin = get_claude_bin()
+
+    async def attempt(tier: str, err_state: dict):
+        yield _sse_event("status", f"Analyzing with {_MODEL_LABELS[tier]}...")
+        if claude_bin:
+            async for event in stream_claude_cli(
+                claude_bin, full_prompt, repo_dir, model=tier, err_state=err_state
+            ):
+                yield event
+        else:
+            async for event in stream_sdk(
+                full_prompt, repo_dir, tier=tier, err_state=err_state
+            ):
+                yield event
+
+    err_state: dict = {}
+    async for event in attempt("fable", err_state):
+        yield event
+
+    # Fall back to Opus only on a transient server-side failure from Fable.
+    if err_state.get("server_error"):
+        yield _sse_event(
+            "status",
+            "Fable was unavailable (server error), retrying with Opus...",
+        )
+        async for event in attempt("opus", {}):
+            yield event
+
+
 @app.post("/api/evaluate")
 async def evaluate(request: Request):
     """Clone repo, run Claude analysis, stream results via SSE."""
@@ -730,16 +822,10 @@ async def evaluate(request: Request):
                 return
 
             repo_dir = tmp_dir + "/repo"
-            yield _sse_event("status", "Claude Code is analyzing...")
 
             full_prompt = _PREAMBLE + prompt
-            claude_bin = get_claude_bin()
-            if claude_bin:
-                async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir):
-                    yield event
-            else:
-                async for event in stream_sdk(full_prompt, repo_dir):
-                    yield event
+            async for event in run_initial_analysis(full_prompt, repo_dir):
+                yield event
 
             # Collect any .md files Claude wrote during analysis
             output_files = _collect_output_files(repo_dir, session_id)
