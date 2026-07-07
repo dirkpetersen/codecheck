@@ -82,7 +82,7 @@ requirements.txt        # Python dependencies (fastapi, uvicorn, anthropic)
 The app uses a two-tier fallback:
 
 ### Tier 1: Claude CLI via subprocess (always preferred when installed)
-The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Initial evals (the code review) use `--model fable`, follow-ups use `--model opus` with `--continue` (resumes prior CLI session). Two event types carry content:
+The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Both initial evals and follow-ups pick their model via the availability probe (Fable preferred; see below); follow-ups add `--continue` (resumes prior CLI session). Two event types carry content:
 - `assistant` events: iterate `message.content[]` for `type=="text"` blocks
 - `result` events: read the top-level `result` string
 
@@ -93,10 +93,10 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ```
 
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
-`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: initial evals use Fable (`ANTHROPIC_DEFAULT_FABLE_MODEL`), follow-ups use Opus (`ANTHROPIC_DEFAULT_OPUS_MODEL`). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
+`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: both initial evals and follow-ups use the probed tier (Fable preferred). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
-### Model selection (initial review) — probe before launch
-`run_initial_analysis` picks the model **before** launching Claude Code, via a fast Bedrock/Azure availability probe (`_pick_available_tier` → `_probe_model`): it sends a 1-token "ping" to each model in `_MODEL_PREFERENCE` order (**Fable → Opus → Sonnet**, `MODEL_PROBE_TIMEOUT_SECS=15`) and chooses the **first that responds without a 5xx**. The chosen model is then run **through Claude Code (CLI)** with `--model <tier>`; the SDK path is only used when the CLI isn't available. The model in use is announced via a `status` SSE (`Analyzing with Opus...`). This avoids waiting for a full CLI launch to fail on an unavailable model. `_is_server_error(status_code)` is true only for HTTP **5xx** — a `429`/4xx (throttling, bad request) means the model exists, so the probe treats it as reachable and does **not** skip to the next tier. The probe needs `boto3`/`botocore`, so `requirements.txt` pins `anthropic[bedrock]`.
+### Model selection — probe before launch
+Every request (initial and follow-up) picks the model **before** launching Claude Code, via a fast Bedrock/Azure availability probe (`pick_tier_cached` → `_pick_available_tier` → `_probe_model`, result cached for `_TIER_CACHE_TTL_SECS=300`): it sends a 1-token "ping" to each model in `_MODEL_PREFERENCE` order (**Fable → Opus → Sonnet**, `MODEL_PROBE_TIMEOUT_SECS=15`) and chooses the **first that responds without a 5xx**. The chosen model is then run **through Claude Code (CLI)** with `--model <tier>`; the SDK path is only used when the CLI isn't available. The model in use is announced via a `status` SSE (`Analyzing with Opus...`). This avoids waiting for a full CLI launch to fail on an unavailable model. `_is_server_error(status_code)` is true only for HTTP **5xx** — a `429`/4xx (throttling, bad request) means the model exists, so the probe treats it as reachable and does **not** skip to the next tier. The probe needs `boto3`/`botocore`, so `requirements.txt` pins `anthropic[bedrock]`.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
@@ -110,8 +110,8 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
 | `ANTHROPIC_API_KEY` | Auth option 1 — Anthropic API key (used directly by CLI and SDK) |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model for initial eval / code review (Bedrock: `global.anthropic.claude-fable-5`, Foundry: `claude-fable-5`) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model for follow-ups (Bedrock: `global.anthropic.claude-opus-4-8`, Foundry: `claude-opus-4-8`) |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model — preferred default for all analyses (Bedrock: `global.anthropic.claude-fable-5`, Foundry: `claude-fable-5`) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model, first fallback tier (Bedrock: `global.anthropic.claude-opus-4-8`, Foundry: `claude-opus-4-8`) |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
 | `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |

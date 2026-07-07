@@ -263,11 +263,11 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
     """Run claude CLI in batch mode, streaming output via stream-json format.
 
     ``model`` is the Claude Code model alias to launch with (e.g. "fable",
-    "opus", "sonnet"). For the initial review the caller probes availability and
-    passes the chosen alias; follow-ups default to Opus (resumes prior session).
+    "opus", "sonnet"). Callers normally probe availability and pass the chosen
+    alias; when omitted, default to Fable.
     """
     if model is None:
-        model = "opus" if continue_conversation else "fable"
+        model = "fable"
     cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
            "--dangerously-skip-permissions"]
     if continue_conversation:
@@ -336,6 +336,10 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
             yield _sse_event("done", "")
     finally:
         stderr_task.cancel()
+        # If the generator is cancelled (client disconnect, proxy timeout), make
+        # sure the CLI subprocess doesn't keep running orphaned.
+        if proc.returncode is None:
+            proc.kill()
 
 
 _SDK_MODEL_ENV = {
@@ -395,9 +399,11 @@ def _probe_model(anthropic_mod, tier: str) -> bool:
 def _pick_available_tier() -> str:
     """Probe Bedrock/Azure in preference order and return the first available tier.
 
-    Falls back to the last preference if none answer (so the CLI still launches and
-    surfaces a real error rather than us guessing). Returns "fable" if the anthropic
-    package is missing — the CLI path doesn't need the SDK.
+    If none answer, fall back to Fable (the preferred default): an all-fail probe
+    usually means the probe itself can't reach the backend (missing creds, network),
+    not that every model is down — so let the CLI launch with the preferred model
+    and surface a real error if there is one. Same when the anthropic package is
+    missing — the CLI path doesn't need the SDK.
     """
     try:
         import anthropic
@@ -406,7 +412,28 @@ def _pick_available_tier() -> str:
     for tier in _MODEL_PREFERENCE:
         if _probe_model(anthropic, tier):
             return tier
-    return _MODEL_PREFERENCE[-1]
+    return _MODEL_PREFERENCE[0]
+
+
+_TIER_CACHE: dict = {"ts": 0.0, "tier": None}
+_TIER_CACHE_TTL_SECS = 300
+
+
+async def pick_tier_cached() -> str:
+    """Return the preferred available tier, caching the probe for a few minutes.
+
+    Keeps follow-ups (and rapid successive evaluations) from re-pinging Bedrock on
+    every request while still re-checking often enough to recover onto Fable soon
+    after an outage ends.
+    """
+    now = time.time()
+    if _TIER_CACHE["tier"] and now - _TIER_CACHE["ts"] < _TIER_CACHE_TTL_SECS:
+        return _TIER_CACHE["tier"]
+    # The probe makes blocking SDK calls — run it off the event loop.
+    tier = await asyncio.to_thread(_pick_available_tier)
+    _TIER_CACHE["ts"] = now
+    _TIER_CACHE["tier"] = tier
+    return tier
 
 
 def _sdk_client_and_model(anthropic_mod, tier: str) -> tuple[object, str, str]:
@@ -769,8 +796,7 @@ async def run_initial_analysis(full_prompt: str, repo_dir: str):
     available. The model in use is announced via a ``status`` SSE.
     """
     yield _sse_event("status", "Checking model availability...")
-    # The probe makes blocking SDK calls — run it off the event loop.
-    tier = await asyncio.to_thread(_pick_available_tier)
+    tier = await pick_tier_cached()
     yield _sse_event("status", f"Analysing with Claude {_MODEL_LABELS[tier]}...")
 
     claude_bin = get_claude_bin()
@@ -809,10 +835,12 @@ async def evaluate(request: Request):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await proc.wait()
+            # communicate() drains both pipes while waiting — plain wait() can
+            # deadlock if git fills the stderr pipe buffer before exiting.
+            _, stderr_bytes = await proc.communicate()
 
             if proc.returncode != 0:
-                stderr = (await proc.stderr.read()).decode("utf-8", errors="replace")
+                stderr = stderr_bytes.decode("utf-8", errors="replace")
                 yield _sse_event("error", f"Git clone failed: {stderr[:500]}")
                 return
 
@@ -857,18 +885,19 @@ async def followup(request: Request):
 
     async def generate():
         repo_dir = session["repo_dir"]
-        yield _sse_event("status", "Continuing analysis...")
+        tier = await pick_tier_cached()
+        yield _sse_event("status", f"Continuing analysis with Claude {_MODEL_LABELS[tier]}...")
 
         claude_bin = get_claude_bin()
         if claude_bin:
             # Don't prepend _PREAMBLE for --continue: Claude already has it from the initial prompt
             async for event in stream_claude_cli(claude_bin, prompt, repo_dir,
-                                                 continue_conversation=True):
+                                                 continue_conversation=True, model=tier):
                 yield event
         else:
             # SDK fallback has no memory, so include preamble
             full_prompt = _PREAMBLE + prompt
-            async for event in stream_sdk(full_prompt, repo_dir, tier="opus"):
+            async for event in stream_sdk(full_prompt, repo_dir, tier=tier):
                 yield event
 
         # Collect any new .md files from this follow-up
@@ -1057,6 +1086,12 @@ async def get_shared_file(share_id: str, filename: str):
 @app.delete("/api/session/{session_id}")
 async def delete_session(session_id: str):
     """Immediately clean up a session's cloned repo and free disk space."""
+    # Session ids are always uuid4 — reject anything else before it reaches
+    # rmtree below (e.g. ".." would resolve to the parent of _FILES_BASE).
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
     session = _sessions.pop(session_id, None)
     if session:
         tmp = session.get("tmp_dir")
