@@ -247,10 +247,55 @@ def check_gh_auth() -> bool:
     return ok
 
 
-def _handle_cli_event(event: dict):
+# USD per million tokens: (input, output). Cache write bills at 1.25x input,
+# cache read at 0.1x input (Anthropic pricing, 5-minute cache TTL).
+_TIER_PRICING_PER_MTOK = {
+    "fable": (10.0, 50.0),
+    "opus": (5.0, 25.0),
+    "sonnet": (3.0, 15.0),
+}
+
+
+class _CostTracker:
+    """Running cost estimate for one CLI invocation.
+
+    stream-json ``assistant`` events carry ``message.usage``; the same message id
+    can appear in several events with growing usage, so usage is stored per id
+    (latest snapshot wins) and summed. The final ``result`` event's
+    ``total_cost_usd`` replaces the estimate with the CLI's exact figure.
+    """
+
+    def __init__(self, tier: str):
+        self._input_per_tok, self._output_per_tok = (
+            p / 1_000_000 for p in _TIER_PRICING_PER_MTOK.get(tier, _TIER_PRICING_PER_MTOK["fable"])
+        )
+        self._usage_by_msg: dict[str, dict] = {}
+        self.total_usd = 0.0
+
+    def add_usage(self, msg_id: str, usage: dict) -> None:
+        self._usage_by_msg[msg_id] = usage
+        total = 0.0
+        for u in self._usage_by_msg.values():
+            total += u.get("input_tokens", 0) * self._input_per_tok
+            total += u.get("output_tokens", 0) * self._output_per_tok
+            total += u.get("cache_creation_input_tokens", 0) * self._input_per_tok * 1.25
+            total += u.get("cache_read_input_tokens", 0) * self._input_per_tok * 0.1
+        self.total_usd = total
+
+    def set_exact(self, total_usd: float) -> None:
+        self.total_usd = total_usd
+
+
+def _handle_cli_event(event: dict, cost: "_CostTracker | None" = None):
     """Translate one stream-json event into zero or more SSE events."""
     etype = event.get("type")
     if etype == "assistant":
+        if cost is not None:
+            msg = event.get("message", {})
+            usage = msg.get("usage")
+            if isinstance(usage, dict):
+                cost.add_usage(msg.get("id", ""), usage)
+                yield _sse_event("cost", f"{cost.total_usd:.4f}")
         for block in event.get("message", {}).get("content", []):
             if block.get("type") == "text" and block.get("text"):
                 yield _sse_event("chunk", block["text"])
@@ -281,6 +326,11 @@ def _handle_cli_event(event: dict):
                 suffix = f" _…({len(lines)} lines)_" if len(lines) > 1 else ""
                 yield _sse_event("chunk", f"  ↳ {preview}{suffix}\n")
     elif etype == "result":
+        if cost is not None:
+            exact = event.get("total_cost_usd")
+            if isinstance(exact, (int, float)) and exact > 0:
+                cost.set_exact(float(exact))
+                yield _sse_event("cost", f"{cost.total_usd:.4f}")
         result_text = event.get("result", "")
         if result_text and isinstance(result_text, str):
             yield _sse_event("report", result_text)
@@ -334,6 +384,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
 
     stderr_buf = bytearray()
     stderr_task = asyncio.create_task(_drain_to_buffer(proc.stderr, stderr_buf))
+    cost = _CostTracker(model)
 
     try:
         while True:
@@ -357,7 +408,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            for sse in _handle_cli_event(event):
+            for sse in _handle_cli_event(event, cost):
                 yield sse
 
         await proc.wait()

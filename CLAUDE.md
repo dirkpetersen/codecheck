@@ -134,6 +134,7 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 - **Streaming via SSE**: `/api/evaluate` and `/api/followup` yield these event types:
   - `session_id` — UUID for this session (first event)
   - `status` — status message string
+  - `cost` — running cost of the current CLI invocation in USD (e.g. `0.1234`); estimated from `assistant`-event token usage priced per tier (`_TIER_PRICING_PER_MTOK`), corrected by the exact `total_cost_usd` on the final `result` event. The UI shows it next to the status badge in 10-cent steps below $1, whole dollars above; follow-ups add to the session total client-side (`costBase`).
   - `chunk` — text fragment to append
   - `report` — final result string from CLI `result` event
   - `file` — JSON `{"name": "...", "url": "..."}` for each `.md` file Claude created

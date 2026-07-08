@@ -260,6 +260,17 @@ body::before{
 }
 .status-badge.done{border-color:var(--green);color:var(--green)}
 .status-badge.error{border-color:var(--red);color:var(--red)}
+.cost-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:5px 14px;border-radius:20px;
+  font-size:.75rem;font-weight:600;
+  font-variant-numeric:tabular-nums;
+  border:1px solid var(--border);
+  background:var(--bg-surface);
+  color:var(--text-secondary);
+}
+.cost-badge.loading{border-color:var(--orange);color:var(--orange)}
+.cost-badge.done{border-color:var(--green);color:var(--green)}
 @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
 
 .results-card{
@@ -530,6 +541,10 @@ let currentRepoUrl = '';
 let currentFiles = [];
 let currentSessionId = '';
 let isFollowingUp = false;  // true while a follow-up is in progress
+let currentCost = null;     // session-cumulative analysis cost in USD (null = no data yet)
+let costBase = 0;           // cost carried over from earlier runs in this session
+let lastStatusType = 'loading';
+let lastStatusText = '';
 let ghAuthenticated = false;
 let evaluating = false;
 let eventSource = null;
@@ -702,6 +717,8 @@ async function startEvaluation(repoUrl, prompt) {
   currentChatter = '';
   currentSessionId = '';
   isFollowingUp = false;
+  currentCost = null;
+  costBase = 0;
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -779,6 +796,7 @@ async function startFollowup(sessionId, prompt) {
   isFollowingUp = true;
   // Keep currentRaw intact — we'll append to it when follow-up results arrive
   currentChatter = '';
+  costBase = currentCost || 0;  // carry prior spend forward across follow-ups
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -849,6 +867,17 @@ function handleSSE(event, data) {
     case 'status':
       setStatus('loading', data);
       break;
+
+    case 'cost': {
+      // Backend sends the running total for the current CLI invocation;
+      // costBase carries cost from earlier runs (follow-ups) in this session.
+      const usd = parseFloat(data);
+      if (!isNaN(usd)) {
+        currentCost = costBase + usd;
+        setStatus(lastStatusType, lastStatusText);
+      }
+      break;
+    }
 
     case 'chunk': {
       currentChatter += data + '\n';
@@ -944,11 +973,22 @@ function renderMarkdown() {
 }
 
 function setStatus(type, text) {
+  lastStatusType = type;
+  lastStatusText = text;
   const bar = document.getElementById('statusBar');
   const dot = type === 'loading' ? '<span class="dot"></span>' : '';
   const icon = type === 'done' ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' :
                type === 'error' ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' : '';
-  bar.innerHTML = `<span class="status-badge ${type}">${dot}${icon} ${escHtml(text)}</span>`;
+  const costPill = currentCost !== null
+    ? `<span class="cost-badge ${type}">${formatCost(currentCost)}</span>` : '';
+  bar.innerHTML = `<span class="status-badge ${type}">${dot}${icon} ${escHtml(text)}</span>${costPill}`;
+}
+
+// Coarse display so the counter doesn't flicker: 10-cent steps below $1,
+// whole-dollar steps from $1 up.
+function formatCost(usd) {
+  if (usd >= 1) return '$' + Math.floor(usd);
+  return '$' + (Math.floor(usd * 10) / 10).toFixed(2);
 }
 
 // ── History ──
@@ -1050,6 +1090,8 @@ function restoreHistory(idx) {
   const entry = history[idx];
   currentRaw = entry.raw;
   currentRepoUrl = entry.repoUrl;
+  currentCost = null;  // cost belongs to the live run, not restored history
+  costBase = 0;
 
   // Hide repo URL (already known), switch to follow-up mode
   document.getElementById('repoUrlRow').classList.add('hidden');
