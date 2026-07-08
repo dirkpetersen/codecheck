@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.2.4/purify.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -935,7 +936,9 @@ function handleSSE(event, data) {
 
 function renderMarkdown() {
   const output = document.getElementById('mdOutput');
-  output.innerHTML = marked.parse(currentRaw);
+  // Sanitize: Claude's output derives from untrusted repo content, so raw HTML
+  // (e.g. <img onerror=...>) must not reach the DOM alive.
+  output.innerHTML = DOMPurify.sanitize(marked.parse(currentRaw));
   // Re-highlight any code blocks that marked didn't catch
   output.querySelectorAll('pre code:not(.hljs)').forEach(el => hljs.highlightElement(el));
 }
@@ -1097,7 +1100,7 @@ async function fileIssue() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        repo_url: currentRepoUrl,
+        session_id: currentSessionId,
         title: 'Code Review — codecheck',
         content: currentRaw,
       }),
