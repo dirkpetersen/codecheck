@@ -64,7 +64,12 @@ python app.py
 # App is served at http://localhost:8000
 ```
 
-There are no tests, linters, or build steps — this is a single-module FastAPI app plus a static HTML page. `.env.default` documents every supported environment variable (see table below).
+There are no tests, linters, or build steps — this is a single-module FastAPI app plus a static HTML page. `.env.default` documents every supported environment variable (see table below). The frontend loads `marked`, `highlight.js` and DOMPurify from cdnjs/jsdelivr at runtime, so the UI needs network access to render.
+
+Retention and timeout knobs live together in one constants block at the top of `app.py` (`SESSION_TTL_SECS`, `FILE_RETENTION_DAYS`, `CLAUDE_CLI_READ_TIMEOUT_SECS`, …). `CLAUDE_CLI_READ_TIMEOUT_SECS = 3300` is deliberately below Traefik's 3600s `writeTimeout` in production.
+
+### Deployment
+Production runs on [appmotel](https://github.com/dirkpetersen/appmotel) (systemd + Traefik): `sudo -u appmotel appmo add codecheck dirkpetersen/codecheck main`, then `appmo env codecheck` / `appmo restart codecheck`. appmotel injects `PORT`; `SYSTEMD_EXEC_PID` disables uvicorn auto-reload. A restart mid-analysis kills the CLI with exit code 143, which `stream_claude_cli` reports as a service restart.
 
 ## Project Structure
 
@@ -82,9 +87,10 @@ requirements.txt        # Python dependencies (fastapi, uvicorn, anthropic)
 The app uses a two-tier fallback:
 
 ### Tier 1: Claude CLI via subprocess (always preferred when installed)
-The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Both initial evals and follow-ups pick their model via the availability probe (Fable preferred; see below); follow-ups add `--continue` (resumes prior CLI session). Two event types carry content:
-- `assistant` events: iterate `message.content[]` for `type=="text"` blocks
-- `result` events: read the top-level `result` string
+The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Both initial evals and follow-ups pick their model via the availability probe (Fable preferred; see below); follow-ups add `--continue` (resumes prior CLI session). `_handle_cli_event` translates three stream-json event types into SSE:
+- `assistant` events: `message.content[]` `text` blocks → `chunk`; `tool_use` blocks → a `chunk` labelled `**[ToolName]** <file_path|command|pattern|query>`; `message.usage` → `cost`
+- `user` events: `tool_result` blocks → a one-line preview `chunk`, `  ↳ <first line> _…(N lines)_`
+- `result` events: the top-level `result` string → `report`; `total_cost_usd` → exact `cost`
 
 ```python
 cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose"]
@@ -95,8 +101,10 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
 `stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: both initial evals and follow-ups use the probed tier (Fable preferred). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
+**Adding or renaming a tier touches six tables** in `app.py`: `_SDK_MODEL_ENV`, `_SDK_DEFAULTS_BEDROCK`, `_SDK_DEFAULTS_FOUNDRY`, `_MODEL_PREFERENCE`, `_TIER_PRICING_PER_MTOK` (cost counter), and `_MODEL_LABELS` (status text).
+
 ### Model selection — probe before launch
-Every request (initial and follow-up) picks the model **before** launching Claude Code, via a fast Bedrock/Azure availability probe (`pick_tier_cached` → `_pick_available_tier` → `_probe_model`, result cached for `_TIER_CACHE_TTL_SECS=300`): it sends a 1-token "ping" to each model in `_MODEL_PREFERENCE` order (**Fable → Opus → Sonnet**, `MODEL_PROBE_TIMEOUT_SECS=15`) and chooses the **first that responds without a 5xx**. The chosen model is then run **through Claude Code (CLI)** with `--model <tier>`; the SDK path is only used when the CLI isn't available. The model in use is announced via a `status` SSE (`Analyzing with Opus...`). This avoids waiting for a full CLI launch to fail on an unavailable model. `_is_server_error(status_code)` is true only for HTTP **5xx** — a `429`/4xx (throttling, bad request) means the model exists, so the probe treats it as reachable and does **not** skip to the next tier. The probe needs `boto3`/`botocore`, so `requirements.txt` pins `anthropic[bedrock]`.
+Every request (initial and follow-up) picks the model **before** launching Claude Code, via a fast Bedrock/Azure availability probe (`pick_tier_cached` → `_pick_available_tier` → `_probe_model`, result cached for `_TIER_CACHE_TTL_SECS=300`): it sends a 1-token "ping" to each model in `_MODEL_PREFERENCE` order (**Fable → Opus → Sonnet**, `MODEL_PROBE_TIMEOUT_SECS=15`) and chooses the **first that responds without a 5xx**. The chosen model is then run **through Claude Code (CLI)** with `--model <tier>`; the SDK path is only used when the CLI isn't available. The model in use is announced via a `status` SSE (`Analyzing with Opus...`). This avoids waiting for a full CLI launch to fail on an unavailable model. The probe only speaks Bedrock/Azure: with only `ANTHROPIC_API_KEY` configured, every probe fails and `_pick_available_tier` falls back to `fable`. The result is correct, but the probe latency is paid once per cache window. `_is_server_error(status_code)` is true only for HTTP **5xx** — a `429`/4xx (throttling, bad request) means the model exists, so the probe treats it as reachable and does **not** skip to the next tier. The probe needs `boto3`/`botocore`, so `requirements.txt` pins `anthropic[bedrock]`.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
@@ -130,7 +138,7 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 - **Single page app**: Form at top, streaming results appear below after submission
 - **Dark, minimal style**: GitHub dark mode aesthetic (CSS vars in `static/index.html`)
 - **Rendered markdown**: Claude's response is parsed with `marked.js` and syntax-highlighted with `highlight.js`
-- **Session history**: Past evaluations kept in-browser during the session; displayed as a clickable sidebar list
+- **Session history**: Stored in `localStorage` under `codecheck_history`, kept 30 days, deduplicated per `repoUrl` (trimmed to the 20 newest on a quota error); displayed as a clickable sidebar list. Deleting an entry also calls `DELETE /api/session/{id}`
 - **Streaming via SSE**: `/api/evaluate` and `/api/followup` yield these event types:
   - `session_id` — UUID for this session (first event)
   - `status` — status message string
@@ -139,7 +147,15 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
   - `report` — final result string from CLI `result` event
   - `file` — JSON `{"name": "...", "url": "..."}` for each `.md` file Claude created
   - `error` — error message string
-  - `done` — signals stream end
+  - `done` — signals stream end (`file` events for newly created `.md` files arrive *after* `done`)
+
+### SSE wire format & client contract
+Both streaming endpoints are `POST`, so the client can't use `EventSource`. It reads `res.body.getReader()` and runs a hand-rolled `event:` / `data:` / blank-line parser in `static/index.html`. `_sse_event` splits multi-line data into repeated `data:` lines, and the client joins them back with `\n`.
+
+Contracts that span `app.py` ↔ `static/index.html`. Changing one side silently breaks the other:
+- **Two panes**: `chunk` → terminal "chatter" box; `report` → rendered markdown card. The SDK path never emits `report` (there's no `result` event), so the client's `done` handler promotes the accumulated chatter into the report.
+- **Chatter markers**: `renderChatter` regex-matches `^\*\*\[(\w+)\]\*\*` (tool calls, colored per tool via `TOOL_COLORS`) and the `  ↳ ` prefix (tool results). Keep `_handle_cli_event`'s label format in sync.
+- **Shared-report files bar**: `get_share` injects attachment chips by string-replacing the literal `<div style="display:flex;justify-content:flex-end;` inside `_FILE_VIEWER`. If you reformat that div, attachments silently disappear from shared reports.
 
 ## Prompt preamble
 
@@ -164,7 +180,8 @@ The app analyzes arbitrary public repos with `--dangerously-skip-permissions`, w
 
 - Prompt template files use the `.prmpt` extension; loaded from **both** `prompts/` in the repo root and `~/.codecheck/prompts/` (user-local). User-local templates take precedence on filename collision.
 - GitHub auth state is determined by running `gh auth status`
-- Repo cloning uses a `tempfile.mkdtemp` directory, cleaned up in a `finally` block after analysis
-- The `_build_repo_context` function (Bedrock/Azure fallback path) caps context at 200KB and skips `.git`, `node_modules`, `__pycache__`, `venv`, `vendor`, `dist`, `build`
+- Repo cloning uses a `tempfile.mkdtemp` directory (`git clone --depth 1`). The `finally` in `/api/evaluate` removes it only on failure. On success it's handed to `_sessions` for follow-ups and reclaimed later.
+- Cleanup is done by `_reaper_loop`, a background task started on app startup. Every 600s it runs `_cleanup_sessions` (clones older than `SESSION_TTL_SECS`) and `_cleanup_file_dirs` (files/shares older than `FILE_RETENTION_DAYS`) via `asyncio.to_thread`. Sessions are in-memory only, so a server restart orphans every live session.
+- The `_build_repo_context` function (Bedrock/Azure fallback path) caps context at 200KB and skips `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `vendor`, `dist`, `build`
 - Generated `.md` files and shared reports live under `_FILES_BASE` (`$TMPDIR/codecheck_files/`): per-session under `<session_id>/`, shared reports under `shares/<share_id>/`. Retained ~30 days.
 - Shipped prompt templates: `code-quality`, `gpu-cuda`, `multi-gpu`, `research-software`, `security`

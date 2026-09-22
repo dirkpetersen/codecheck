@@ -35,7 +35,7 @@ python app.py
 
 ## Claude Code Backends
 
-The app requires **both** the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) **and** an authentication method. If the CLI is not installed or no credentials are configured, the app will not function. Initial evaluations use Sonnet; follow-up questions use Opus.
+The app requires **both** the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) **and** an authentication method. If the CLI is not installed or no credentials are configured, the app will not function. Before each evaluation or follow-up, the app sends a quick availability ping and uses the first model that responds, in the order **Fable → Opus → Sonnet**. The result is cached for 5 minutes.
 
 The app checks for the `claude` binary in `~/.local/bin/claude`, `~/bin/claude`, then `PATH`. When found, it runs Claude Code via subprocess with `--output-format stream-json --verbose` — this gives the richest experience with tool calls, file operations, and the full agent loop streamed live.
 
@@ -66,7 +66,8 @@ Then set in `.env`:
 CLAUDE_CODE_USE_BEDROCK=1
 AWS_PROFILE=codecheck
 AWS_DEFAULT_REGION=us-west-2
-ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-7
+ANTHROPIC_DEFAULT_FABLE_MODEL=global.anthropic.claude-fable-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=global.anthropic.claude-opus-4-8
 ANTHROPIC_DEFAULT_SONNET_MODEL=global.anthropic.claude-sonnet-4-6
 ```
 
@@ -78,7 +79,8 @@ Uses the Anthropic SDK via Microsoft Azure AI Foundry for authentication.
 CLAUDE_CODE_USE_FOUNDRY=1
 ANTHROPIC_FOUNDRY_BASE_URL=https://<resource>.services.ai.azure.com
 ANTHROPIC_FOUNDRY_API_KEY=your-azure-api-key
-ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7
+ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8
 ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
 ```
 
@@ -92,7 +94,7 @@ If the Claude Code CLI is **not installed**, the app falls back to using the Ant
 
 Templates are `.prmpt` files where the first line is the display name and the rest is the prompt body. They are loaded from two locations (merged, user-local wins on name conflicts):
 
-- `prompts/` — shipped defaults (code quality, multi-GPU, security)
+- `prompts/` — shipped defaults (code quality, GPU/CUDA, multi-GPU, research software, security)
 - `~/.codecheck/prompts/` — your own custom templates
 
 ## Configuration
@@ -116,8 +118,9 @@ All settings with defaults are documented in `.env.default`. Key variables:
 | `CLAUDE_CODE_USE_FOUNDRY` | — | Set to `1` to use Azure AI Foundry (Option 3) |
 | `ANTHROPIC_FOUNDRY_BASE_URL` | — | Azure AI Foundry endpoint URL |
 | `ANTHROPIC_FOUNDRY_API_KEY` | — | Azure AI Foundry API key |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | per-backend | Opus model for follow-ups (SDK fallback only) |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | per-backend | Sonnet model for initial eval (SDK fallback only) |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | per-backend | Fable model, the preferred tier (used by the availability probe and the SDK fallback) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | per-backend | Opus model, the first fallback tier |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | per-backend | Sonnet model, the last fallback tier |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub token for higher clone rate limits |
 
 ## Deployment
