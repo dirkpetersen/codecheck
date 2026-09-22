@@ -118,8 +118,8 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
 | `ANTHROPIC_API_KEY` | Auth option 1 — Anthropic API key (used directly by CLI and SDK) |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model — preferred default for all analyses (Bedrock: `global.anthropic.claude-fable-5`, Foundry: `claude-fable-5`) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model, first fallback tier (Bedrock: `global.anthropic.claude-opus-4-8`, Foundry: `claude-opus-4-8`) |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model — preferred default for all analyses (Bedrock: `global.anthropic.claude-fable-5-1`, Foundry: `claude-fable-5-1`) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model, first fallback tier (Bedrock: `global.anthropic.claude-opus-5-5`, Foundry: `claude-opus-5-5`) |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
 | `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |

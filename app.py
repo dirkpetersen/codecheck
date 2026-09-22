@@ -247,12 +247,13 @@ def check_gh_auth() -> bool:
     return ok
 
 
-# USD per million tokens: (input, output). Cache write bills at 1.25x input,
-# cache read at 0.1x input (Anthropic pricing, 5-minute cache TTL).
+# USD per million tokens: (input, output, cache read) for the default model of
+# each tier (Fable 5.1, Opus 5.5, Sonnet 4.6). Cache write bills at 1.25x input
+# (5-minute cache TTL).
 _TIER_PRICING_PER_MTOK = {
-    "fable": (10.0, 50.0),
-    "opus": (5.0, 25.0),
-    "sonnet": (3.0, 15.0),
+    "fable": (10.0, 50.0, 0.25),
+    "opus": (4.0, 20.0, 0.20),
+    "sonnet": (3.0, 15.0, 0.30),
 }
 
 
@@ -266,7 +267,7 @@ class _CostTracker:
     """
 
     def __init__(self, tier: str):
-        self._input_per_tok, self._output_per_tok = (
+        self._input_per_tok, self._output_per_tok, self._cache_read_per_tok = (
             p / 1_000_000 for p in _TIER_PRICING_PER_MTOK.get(tier, _TIER_PRICING_PER_MTOK["fable"])
         )
         self._usage_by_msg: dict[str, dict] = {}
@@ -279,7 +280,7 @@ class _CostTracker:
             total += u.get("input_tokens", 0) * self._input_per_tok
             total += u.get("output_tokens", 0) * self._output_per_tok
             total += u.get("cache_creation_input_tokens", 0) * self._input_per_tok * 1.25
-            total += u.get("cache_read_input_tokens", 0) * self._input_per_tok * 0.1
+            total += u.get("cache_read_input_tokens", 0) * self._cache_read_per_tok
         self.total_usd = total
 
     def set_exact(self, total_usd: float) -> None:
@@ -442,13 +443,13 @@ _SDK_MODEL_ENV = {
     "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
 }
 _SDK_DEFAULTS_BEDROCK = {
-    "fable": "global.anthropic.claude-fable-5",
-    "opus": "global.anthropic.claude-opus-4-8",
+    "fable": "global.anthropic.claude-fable-5-1",
+    "opus": "global.anthropic.claude-opus-5-5",
     "sonnet": "global.anthropic.claude-sonnet-4-6",
 }
 _SDK_DEFAULTS_FOUNDRY = {
-    "fable": "claude-fable-5",
-    "opus": "claude-opus-4-8",
+    "fable": "claude-fable-5-1",
+    "opus": "claude-opus-5-5",
     "sonnet": "claude-sonnet-4-6",
 }
 
