@@ -36,6 +36,7 @@ REPO_CONTEXT_MAX_BYTES = 200_000           # SDK fallback: cap repo dump at 200 
 BROWSER_FILE_MAX_BYTES = 200_000           # /browse: truncate file view at 200 KB
 CLAUDE_CLI_READ_TIMEOUT_SECS = 3300        # 55-min idle timeout on CLI output (Traefik writeTimeout is 3600s)
 MODEL_PROBE_TIMEOUT_SECS = 15              # per-model availability ping before launch
+CLI_LINE_LIMIT_BYTES = 64 * 1024 * 1024    # max stream-json line (tool results / final report can far exceed asyncio's 64 KiB default)
 SHARE_ID_MAX_LEN = 20
 
 # Persistent directory for Claude-created files (survives session expiry, cleared after FILE_RETENTION_DAYS or on /tmp wipe)
@@ -400,6 +401,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         stderr=asyncio.subprocess.PIPE,
         cwd=repo_dir,
         env=env,
+        limit=CLI_LINE_LIMIT_BYTES,
     )
     if session_id:
         _running_procs[session_id] = proc
@@ -421,6 +423,11 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                     f"Claude CLI timed out after {CLAUDE_CLI_READ_TIMEOUT_SECS // 60} minutes.",
                 )
                 return
+            except ValueError:
+                # A line over CLI_LINE_LIMIT_BYTES: asyncio has already discarded
+                # it, so skip it and keep streaming rather than killing the response.
+                logger.warning("skipped stream-json line over %d bytes", CLI_LINE_LIMIT_BYTES)
+                continue
             if not line:
                 break
             line = line.decode("utf-8", errors="replace").strip()
@@ -1016,6 +1023,11 @@ async def evaluate(request: Request):
             }
             keep_session = True
 
+        except Exception as e:
+            # Report instead of dropping the connection (the browser would only
+            # show "Connection lost: network error").
+            logger.exception("evaluation %s failed", session_id)
+            yield _sse_event("error", f"Internal error: {e}")
         finally:
             _active_streams.discard(session_id)
             _cancelled.discard(session_id)
@@ -1071,6 +1083,9 @@ async def followup(request: Request):
             for fname in sorted(output_files):
                 url = f"/api/files/{session_id}/{fname}"
                 yield _sse_event("file", json.dumps({"name": fname, "url": url}))
+        except Exception as e:
+            logger.exception("follow-up %s failed", session_id)
+            yield _sse_event("error", f"Internal error: {e}")
         finally:
             _active_streams.discard(session_id)
             _cancelled.discard(session_id)
