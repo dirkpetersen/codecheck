@@ -35,6 +35,7 @@ On submit:
 | `POST /api/share` → `GET /share/{id}`, `/share/{id}/file/{path}` | Persist & serve a shareable report + attached files |
 | `GET /api/files/{session_id}/{path}` | Serve a Claude-created `.md` file (session must be live) |
 | `GET /browse/{session_id}/{path}` | File browser over the cloned repo |
+| `POST /api/cancel/{session_id}` | Stop the running evaluate/follow-up: kills its `git`/`claude` subprocess |
 | `DELETE /api/session/{session_id}` | Eagerly tear down a session's clone and files |
 
 Path-traversal defenses recur throughout: `_valid_share_id` (alnum-only), and `Path.resolve()` + `is_relative_to(base)` checks before serving any user-supplied path. Preserve these when touching file-serving routes. The three HTML responses are built by string-substituting into `_FILE_VIEWER` / `_BROWSER_PAGE` templates with `_safe_json_for_html` (escapes `</` to prevent `</script>` breakout) — not a template engine.
@@ -87,7 +88,7 @@ requirements.txt        # Python dependencies (fastapi, uvicorn, anthropic)
 The app uses a two-tier fallback:
 
 ### Tier 1: Claude CLI via subprocess (always preferred when installed)
-The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Both initial evals and follow-ups pick their model via the availability probe (Fable preferred; see below); follow-ups add `--continue` (resumes prior CLI session). `_handle_cli_event` translates three stream-json event types into SSE:
+The app **always uses the Claude Code CLI** when the binary is found (`~/.local/bin/claude`, `~/bin/claude`, or `PATH`). `stream_claude_cli` runs it with `--output-format stream-json --verbose --dangerously-skip-permissions` and parses newline-delimited JSON. Both initial evals and follow-ups pick their model via the availability probe, starting from the user's Opus/Fable choice (see below); follow-ups add `--continue` (resumes prior CLI session). `_handle_cli_event` translates three stream-json event types into SSE:
 - `assistant` events: `message.content[]` `text` blocks → `chunk`; `tool_use` blocks → a `chunk` labelled `**[ToolName]** <file_path|command|pattern|query>`; `message.usage` → `cost`
 - `user` events: `tool_result` blocks → a one-line preview `chunk`, `  ↳ <first line> _…(N lines)_`
 - `result` events: the top-level `result` string → `report`; `total_cost_usd` → exact `cost`
@@ -99,12 +100,14 @@ proc = await asyncio.create_subprocess_exec(*cmd, cwd=repo_dir, ...)
 ```
 
 ### Tier 2: Anthropic SDK via AWS Bedrock or Azure AI Foundry (fallback when CLI unavailable)
-`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: both initial evals and follow-ups use the probed tier (Fable preferred). Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
+`stream_sdk` in `app.py` is **only used when the Claude Code CLI is not installed**. It builds a repo context string from file contents, then streams via `AnthropicBedrock` or the Anthropic client with Azure base URL. The model is chosen by a `tier` argument (`"fable"` | `"opus"` | `"sonnet"`) resolved in `_sdk_client_and_model`: both initial evals and follow-ups use the probed tier. Set `CLAUDE_CODE_USE_FOUNDRY=1` to use Azure instead of Bedrock.
 
 **Adding or renaming a tier touches six tables** in `app.py`: `_SDK_MODEL_ENV`, `_SDK_DEFAULTS_BEDROCK`, `_SDK_DEFAULTS_FOUNDRY`, `_MODEL_PREFERENCE`, `_TIER_PRICING_PER_MTOK` (cost counter), and `_MODEL_LABELS` (status text).
 
 ### Model selection — probe before launch
-Every request (initial and follow-up) picks the model **before** launching Claude Code, via a fast Bedrock/Azure availability probe (`pick_tier_cached` → `_pick_available_tier` → `_probe_model`, result cached for `_TIER_CACHE_TTL_SECS=300`): it sends a 1-token "ping" to each model in `_MODEL_PREFERENCE` order (**Fable → Opus → Sonnet**, `MODEL_PROBE_TIMEOUT_SECS=15`) and chooses the **first that responds without a 5xx**. The chosen model is then run **through Claude Code (CLI)** with `--model <tier>`; the SDK path is only used when the CLI isn't available. The model in use is announced via a `status` SSE (`Analyzing with Opus...`). This avoids waiting for a full CLI launch to fail on an unavailable model. The probe only speaks Bedrock/Azure: with only `ANTHROPIC_API_KEY` configured, every probe fails and `_pick_available_tier` falls back to `fable`. The result is correct, but the probe latency is paid once per cache window. `_is_server_error(status_code)` is true only for HTTP **5xx** — a `429`/4xx (throttling, bad request) means the model exists, so the probe treats it as reachable and does **not** skip to the next tier. The probe needs `boto3`/`botocore`, so `requirements.txt` pins `anthropic[bedrock]`.
+Every request (initial and follow-up) picks the model **before** launching Claude Code, via a fast Bedrock/Azure availability probe (`pick_tier_cached` → `_pick_available_tier` → `_probe_model`, result cached per requested tier for `_TIER_CACHE_TTL_SECS=300`): it sends a 1-token "ping" to the user's pick first, then the rest of `_MODEL_PREFERENCE` (**Opus → Fable → Sonnet**), with `MODEL_PROBE_TIMEOUT_SECS=15`, and chooses the **first that responds without a 5xx**. The chosen model is then run **through Claude Code (CLI)** with `--model <tier>`; the SDK path is only used when the CLI isn't available. The model in use is announced via a `status` SSE (`Analysing with Claude Opus...`).
+
+The UI's **model toggle** (Opus default, remembered in `localStorage` under `codecheck_model`) sends `"model": "opus"|"fable"` in the `/api/evaluate` and `/api/followup` bodies. `_requested_tier` maps anything else to `_DEFAULT_TIER` (`opus`), and only `_SELECTABLE_TIERS` can be requested. Sonnet is never selectable, only a fallback. This avoids waiting for a full CLI launch to fail on an unavailable model. The probe only speaks Bedrock/Azure: with only `ANTHROPIC_API_KEY` configured, every probe fails and `_pick_available_tier` falls back to the requested tier. The result is correct, but the probe latency is paid once per cache window. `_is_server_error(status_code)` is true only for HTTP **5xx** — a `429`/4xx (throttling, bad request) means the model exists, so the probe treats it as reachable and does **not** skip to the next tier. The probe needs `boto3`/`botocore`, so `requirements.txt` pins `anthropic[bedrock]`.
 
 ### Self-invocation guard
 Claude Code **cannot invoke itself** (nested CLI calls crash). The `CLAUDECODE` environment variable is set when running inside a Claude Code session. `get_claude_bin()` returns `None` when `CLAUDECODE` is set, causing automatic fallback to the SDK path:
@@ -118,8 +121,8 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
 | `CLAUDECODE` | Set inside Claude Code sessions — skip CLI, use SDK fallback |
 | `PORT` | Override default port 8000 |
 | `ANTHROPIC_API_KEY` | Auth option 1 — Anthropic API key (used directly by CLI and SDK) |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model — preferred default for all analyses (Bedrock: `global.anthropic.claude-fable-5-1`, Foundry: `claude-fable-5-1`) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model, first fallback tier (Bedrock: `global.anthropic.claude-opus-5-5`, Foundry: `claude-opus-5-5`) |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable model — selectable in the UI (Bedrock: `global.anthropic.claude-fable-5-1`, Foundry: `claude-fable-5-1`) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus model — the default (Bedrock: `global.anthropic.claude-opus-5-5`, Foundry: `claude-opus-5-5`) |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet model (Bedrock: `global.anthropic.claude-sonnet-4-6`, Foundry: `claude-sonnet-4-6`) |
 | `CLAUDE_CODE_USE_BEDROCK` | Set to `1` to use AWS Bedrock |
 | `AWS_PROFILE` | AWS profile for Bedrock (default: `codecheck`) |
@@ -148,6 +151,14 @@ claude_bin = shutil.which("claude") if not os.environ.get("CLAUDECODE") else Non
   - `file` — JSON `{"name": "...", "url": "..."}` for each `.md` file Claude created
   - `error` — error message string
   - `done` — signals stream end (`file` events for newly created `.md` files arrive *after* `done`)
+
+### Cancellation
+The **Cancel** button (rendered by `setStatus` next to the cost badge while a run is loading) calls `POST /api/cancel/{session_id}`. Three module-level registries drive it:
+- `_active_streams` holds session ids with an evaluate/follow-up generator in flight. The cancel endpoint ignores other ids, so a stale flag can't kill the next follow-up. A second follow-up on a busy session gets HTTP 409.
+- `_running_procs` maps a session id to its current subprocess (`git clone`, then `claude`), which the endpoint kills.
+- `_cancelled` holds the flag, checked between phases (after clone and after the probe) and per chunk in `stream_sdk`.
+
+Cancelled streams end with `error: "Analysis cancelled."`. A cancelled *initial* run discards its clone, so the client clears `currentSessionId`. A cancelled *follow-up* keeps the session. With no session id yet, the client aborts the fetch; a disconnect also kills the subprocess via `stream_claude_cli`'s `finally`.
 
 ### SSE wire format & client contract
 Both streaming endpoints are `POST`, so the client can't use `EventSource`. It reads `res.body.getReader()` and runs a hand-rolled `event:` / `data:` / blank-line parser in `static/index.html`. `_sse_event` splits multi-line data into repeated `data:` lines, and the client joins them back with `\n`.

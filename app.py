@@ -48,6 +48,23 @@ _known_files: dict[str, set[str]] = {}
 # Active sessions kept alive for follow-up questions: session_id -> {tmp_dir, repo_dir, created}
 _sessions: dict[str, dict] = {}
 
+# Cancellation (POST /api/cancel/{session_id}): session ids with an evaluate/followup
+# stream in flight, the subprocess (git clone or claude CLI) each is currently
+# running, and the ids whose user asked to cancel.
+_active_streams: set[str] = set()
+_running_procs: dict[str, asyncio.subprocess.Process] = {}
+_cancelled: set[str] = set()
+
+_CANCELLED_MSG = "Analysis cancelled."
+
+
+def _kill_proc(proc) -> None:
+    """Kill a subprocess, tolerating one that has already exited."""
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+
 
 def _valid_share_id(share_id: str) -> bool:
     """Share IDs are hex-only and short — reject anything else to prevent traversal."""
@@ -349,15 +366,17 @@ async def _drain_to_buffer(stream, buf: bytearray, max_bytes: int = 65536):
 
 async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                             continue_conversation: bool = False,
-                            model: str | None = None):
+                            model: str | None = None,
+                            session_id: str | None = None):
     """Run claude CLI in batch mode, streaming output via stream-json format.
 
     ``model`` is the Claude Code model alias to launch with (e.g. "fable",
     "opus", "sonnet"). Callers normally probe availability and pass the chosen
-    alias; when omitted, default to Fable.
+    alias; when omitted, default to Opus. ``session_id`` registers the process
+    so /api/cancel can kill it.
     """
     if model is None:
-        model = "fable"
+        model = _DEFAULT_TIER
     cmd = [claude_bin, "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
            "--dangerously-skip-permissions"]
     if continue_conversation:
@@ -382,6 +401,8 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         cwd=repo_dir,
         env=env,
     )
+    if session_id:
+        _running_procs[session_id] = proc
 
     stderr_buf = bytearray()
     stderr_task = asyncio.create_task(_drain_to_buffer(proc.stderr, stderr_buf))
@@ -394,7 +415,7 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
                     proc.stdout.readline(), timeout=CLAUDE_CLI_READ_TIMEOUT_SECS
                 )
             except asyncio.TimeoutError:
-                proc.kill()
+                _kill_proc(proc)
                 yield _sse_event(
                     "error",
                     f"Claude CLI timed out after {CLAUDE_CLI_READ_TIMEOUT_SECS // 60} minutes.",
@@ -415,7 +436,9 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
         await proc.wait()
         await stderr_task
 
-        if proc.returncode != 0:
+        if session_id in _cancelled:
+            yield _sse_event("error", _CANCELLED_MSG)
+        elif proc.returncode != 0:
             stderr = bytes(stderr_buf).decode("utf-8", errors="replace")
             # 143 = 128+SIGTERM: the process was killed externally — most commonly a
             # service restart/deployment interrupting a running analysis.
@@ -431,10 +454,12 @@ async def stream_claude_cli(claude_bin: str, prompt: str, repo_dir: str,
             yield _sse_event("done", "")
     finally:
         stderr_task.cancel()
+        if session_id and _running_procs.get(session_id) is proc:
+            del _running_procs[session_id]
         # If the generator is cancelled (client disconnect, proxy timeout), make
         # sure the CLI subprocess doesn't keep running orphaned.
         if proc.returncode is None:
-            proc.kill()
+            _kill_proc(proc)
 
 
 _SDK_MODEL_ENV = {
@@ -454,8 +479,17 @@ _SDK_DEFAULTS_FOUNDRY = {
 }
 
 
-# Preferred model order for the initial review: try Fable first, then fall back.
-_MODEL_PREFERENCE = ("fable", "opus", "sonnet")
+# Fallback order when the requested model is unavailable. Users pick Opus
+# (default) or Fable in the UI; the pick is tried first, then the rest in order.
+_MODEL_PREFERENCE = ("opus", "fable", "sonnet")
+_SELECTABLE_TIERS = ("opus", "fable")
+_DEFAULT_TIER = "opus"
+
+
+def _requested_tier(body: dict) -> str:
+    """The model the user picked in the UI, or the default if missing/invalid."""
+    tier = body.get("model")
+    return tier if tier in _SELECTABLE_TIERS else _DEFAULT_TIER
 
 
 def _is_server_error(status_code: int | None) -> bool:
@@ -491,10 +525,10 @@ def _probe_model(anthropic_mod, tier: str) -> bool:
         return not _is_server_error(status_code) and status_code is not None
 
 
-def _pick_available_tier() -> str:
-    """Probe Bedrock/Azure in preference order and return the first available tier.
+def _pick_available_tier(preferred: str = _DEFAULT_TIER) -> str:
+    """Probe Bedrock/Azure, ``preferred`` first, and return the first available tier.
 
-    If none answer, fall back to Fable (the preferred default): an all-fail probe
+    If none answer, fall back to ``preferred``: an all-fail probe
     usually means the probe itself can't reach the backend (missing creds, network),
     not that every model is down — so let the CLI launch with the preferred model
     and surface a real error if there is one. Same when the anthropic package is
@@ -503,31 +537,33 @@ def _pick_available_tier() -> str:
     try:
         import anthropic
     except ImportError:
-        return _MODEL_PREFERENCE[0]
-    for tier in _MODEL_PREFERENCE:
+        return preferred
+    order = (preferred, *(t for t in _MODEL_PREFERENCE if t != preferred))
+    for tier in order:
         if _probe_model(anthropic, tier):
             return tier
-    return _MODEL_PREFERENCE[0]
+    return preferred
 
 
-_TIER_CACHE: dict = {"ts": 0.0, "tier": None}
+# preferred tier -> (probe timestamp, chosen tier)
+_TIER_CACHE: dict[str, tuple[float, str]] = {}
 _TIER_CACHE_TTL_SECS = 300
 
 
-async def pick_tier_cached() -> str:
-    """Return the preferred available tier, caching the probe for a few minutes.
+async def pick_tier_cached(preferred: str = _DEFAULT_TIER) -> str:
+    """Return the first available tier starting from ``preferred``, cached per preference.
 
     Keeps follow-ups (and rapid successive evaluations) from re-pinging Bedrock on
-    every request while still re-checking often enough to recover onto Fable soon
-    after an outage ends.
+    every request while still re-checking often enough to recover onto the
+    preferred model soon after an outage ends.
     """
     now = time.time()
-    if _TIER_CACHE["tier"] and now - _TIER_CACHE["ts"] < _TIER_CACHE_TTL_SECS:
-        return _TIER_CACHE["tier"]
+    cached = _TIER_CACHE.get(preferred)
+    if cached and now - cached[0] < _TIER_CACHE_TTL_SECS:
+        return cached[1]
     # The probe makes blocking SDK calls — run it off the event loop.
-    tier = await asyncio.to_thread(_pick_available_tier)
-    _TIER_CACHE["ts"] = now
-    _TIER_CACHE["tier"] = tier
+    tier = await asyncio.to_thread(_pick_available_tier, preferred)
+    _TIER_CACHE[preferred] = (now, tier)
     return tier
 
 
@@ -551,10 +587,12 @@ def _sdk_client_and_model(anthropic_mod, tier: str) -> tuple[object, str, str]:
     return client, os.environ.get(model_key, _SDK_DEFAULTS_BEDROCK[tier]), "Bedrock"
 
 
-async def stream_sdk(prompt: str, repo_dir: str, tier: str = "fable"):
+async def stream_sdk(prompt: str, repo_dir: str, tier: str = _DEFAULT_TIER,
+                     session_id: str | None = None):
     """Fallback when Claude CLI is unavailable: use Anthropic SDK via Bedrock or Azure.
 
-    tier selects the model: "fable" (initial review), "opus" (follow-ups), or "sonnet".
+    tier selects the model: "opus", "fable", or "sonnet". Stops between chunks
+    once ``session_id`` is cancelled.
     """
     try:
         import anthropic
@@ -573,6 +611,9 @@ async def stream_sdk(prompt: str, repo_dir: str, tier: str = "fable"):
             messages=[{"role": "user", "content": full_prompt}],
         ) as stream:
             for text in stream.text_stream:
+                if session_id in _cancelled:
+                    yield _sse_event("error", _CANCELLED_MSG)
+                    return
                 yield _sse_event("chunk", text)
         yield _sse_event("done", "")
     except Exception as e:
@@ -882,25 +923,30 @@ async def get_gh_auth():
 _MODEL_LABELS = {"fable": "Fable", "opus": "Opus", "sonnet": "Sonnet"}
 
 
-async def run_initial_analysis(full_prompt: str, repo_dir: str):
+async def run_initial_analysis(full_prompt: str, repo_dir: str, preferred: str, session_id: str):
     """Run the initial code review, picking the model by a fast availability probe.
 
-    Before launching, probe Bedrock/Azure in preference order (Fable → Opus →
-    Sonnet) and choose the first model that responds. This avoids waiting for a
+    Before launching, probe Bedrock/Azure starting with the user's pick
+    (``preferred``, then the rest of ``_MODEL_PREFERENCE``) and choose the first
+    model that responds. This avoids waiting for a
     full Claude Code launch to fail on an unavailable model. The chosen model is
     then run *through Claude Code* (CLI); the SDK is only used when the CLI isn't
     available. The model in use is announced via a ``status`` SSE.
     """
     yield _sse_event("status", "Checking model availability...")
-    tier = await pick_tier_cached()
+    tier = await pick_tier_cached(preferred)
+    if session_id in _cancelled:
+        yield _sse_event("error", _CANCELLED_MSG)
+        return
     yield _sse_event("status", f"Analysing with Claude {_MODEL_LABELS[tier]}...")
 
     claude_bin = get_claude_bin()
     if claude_bin:
-        async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir, model=tier):
+        async for event in stream_claude_cli(claude_bin, full_prompt, repo_dir,
+                                             model=tier, session_id=session_id):
             yield event
     else:
-        async for event in stream_sdk(full_prompt, repo_dir, tier=tier):
+        async for event in stream_sdk(full_prompt, repo_dir, tier=tier, session_id=session_id):
             yield event
 
 
@@ -910,6 +956,7 @@ async def evaluate(request: Request):
     body = await request.json()
     repo_url = resolve_repo_url(body.get("repo_url", ""))
     prompt = body.get("prompt", "").strip()
+    preferred = _requested_tier(body)
 
     if not repo_url or not prompt:
         return JSONResponse({"error": "repo_url and prompt are required"}, status_code=400)
@@ -917,6 +964,7 @@ async def evaluate(request: Request):
     async def generate():
         # Expired sessions/files are reaped by the background _reaper_loop.
         session_id = str(uuid.uuid4())
+        _active_streams.add(session_id)
         yield _sse_event("session_id", session_id)
         yield _sse_event("status", "Cloning repository...")
 
@@ -929,10 +977,17 @@ async def evaluate(request: Request):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            _running_procs[session_id] = proc
             # communicate() drains both pipes while waiting — plain wait() can
             # deadlock if git fills the stderr pipe buffer before exiting.
-            _, stderr_bytes = await proc.communicate()
+            try:
+                _, stderr_bytes = await proc.communicate()
+            finally:
+                _running_procs.pop(session_id, None)
 
+            if session_id in _cancelled:
+                yield _sse_event("error", _CANCELLED_MSG)
+                return
             if proc.returncode != 0:
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
                 yield _sse_event("error", f"Git clone failed: {stderr[:500]}")
@@ -941,8 +996,11 @@ async def evaluate(request: Request):
             repo_dir = tmp_dir + "/repo"
 
             full_prompt = _PREAMBLE + prompt
-            async for event in run_initial_analysis(full_prompt, repo_dir):
+            async for event in run_initial_analysis(full_prompt, repo_dir, preferred, session_id):
                 yield event
+            # A cancelled first run leaves nothing to follow up on — discard the clone.
+            if session_id in _cancelled:
+                return
 
             # Collect any .md files Claude wrote during analysis (git ls-files +
             # file reads — run off the event loop)
@@ -959,6 +1017,8 @@ async def evaluate(request: Request):
             keep_session = True
 
         finally:
+            _active_streams.discard(session_id)
+            _cancelled.discard(session_id)
             if not keep_session:
                 await asyncio.to_thread(shutil.rmtree, tmp_dir, ignore_errors=True)
 
@@ -971,6 +1031,7 @@ async def followup(request: Request):
     body = await request.json()
     session_id = body.get("session_id", "")
     prompt = body.get("prompt", "").strip()
+    preferred = _requested_tier(body)
 
     if not session_id or not prompt:
         return JSONResponse({"error": "session_id and prompt are required"}, status_code=400)
@@ -978,29 +1039,41 @@ async def followup(request: Request):
     session = _sessions.get(session_id)
     if not session:
         return JSONResponse({"error": "Session expired — please run a new evaluation"}, status_code=404)
+    if session_id in _active_streams:
+        return JSONResponse({"error": "An analysis is already running for this session"}, status_code=409)
 
     async def generate():
-        repo_dir = session["repo_dir"]
-        tier = await pick_tier_cached()
-        yield _sse_event("status", f"Continuing analysis with Claude {_MODEL_LABELS[tier]}...")
+        _active_streams.add(session_id)
+        try:
+            repo_dir = session["repo_dir"]
+            tier = await pick_tier_cached(preferred)
+            if session_id in _cancelled:
+                yield _sse_event("error", _CANCELLED_MSG)
+                return
+            yield _sse_event("status", f"Continuing analysis with Claude {_MODEL_LABELS[tier]}...")
 
-        claude_bin = get_claude_bin()
-        if claude_bin:
-            # Don't prepend _PREAMBLE for --continue: Claude already has it from the initial prompt
-            async for event in stream_claude_cli(claude_bin, prompt, repo_dir,
-                                                 continue_conversation=True, model=tier):
-                yield event
-        else:
-            # SDK fallback has no memory, so include preamble
-            full_prompt = _PREAMBLE + prompt
-            async for event in stream_sdk(full_prompt, repo_dir, tier=tier):
-                yield event
+            claude_bin = get_claude_bin()
+            if claude_bin:
+                # Don't prepend _PREAMBLE for --continue: Claude already has it from the initial prompt
+                async for event in stream_claude_cli(claude_bin, prompt, repo_dir,
+                                                     continue_conversation=True, model=tier,
+                                                     session_id=session_id):
+                    yield event
+            else:
+                # SDK fallback has no memory, so include preamble
+                full_prompt = _PREAMBLE + prompt
+                async for event in stream_sdk(full_prompt, repo_dir, tier=tier, session_id=session_id):
+                    yield event
 
-        # Collect any new .md files from this follow-up (off the event loop)
-        output_files = await asyncio.to_thread(_collect_output_files, repo_dir, session_id)
-        for fname in sorted(output_files):
-            url = f"/api/files/{session_id}/{fname}"
-            yield _sse_event("file", json.dumps({"name": fname, "url": url}))
+            # Collect any new .md files from this follow-up (off the event loop) —
+            # also after a cancel, so files written before it aren't lost.
+            output_files = await asyncio.to_thread(_collect_output_files, repo_dir, session_id)
+            for fname in sorted(output_files):
+                url = f"/api/files/{session_id}/{fname}"
+                yield _sse_event("file", json.dumps({"name": fname, "url": url}))
+        finally:
+            _active_streams.discard(session_id)
+            _cancelled.discard(session_id)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1189,6 +1262,23 @@ async def get_shared_file(share_id: str, filename: str):
             .replace("PLACEHOLDER_FILENAME", safe_filename)
             .replace("PLACEHOLDER_CONTENT_JSON", _safe_json_for_html(content)))
     return HTMLResponse(page)
+
+
+@app.post("/api/cancel/{session_id}")
+async def cancel_analysis(session_id: str):
+    """Stop the evaluation or follow-up running for a session, killing its subprocess."""
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        return JSONResponse({"error": "invalid session id"}, status_code=400)
+    # Only flag streams that are running: a stale flag would cancel the next follow-up.
+    if session_id not in _active_streams:
+        return JSONResponse({"ok": False, "error": "nothing running for this session"})
+    _cancelled.add(session_id)
+    proc = _running_procs.get(session_id)
+    if proc and proc.returncode is None:
+        _kill_proc(proc)
+    return JSONResponse({"ok": True})
 
 
 @app.delete("/api/session/{session_id}")

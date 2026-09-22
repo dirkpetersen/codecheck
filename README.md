@@ -26,6 +26,8 @@ python app.py
 ## Features
 
 - **Live streaming** — SSE-based real-time output with a terminal-like chatter box showing Claude Code's tool calls
+- **Model toggle** — pick Opus (default) or Fable per run; the choice is remembered in the browser
+- **Cancel** — stop a running analysis instantly from the button next to the live cost
 - **Follow-up questions** — continue the conversation in the same Claude Code session (`--continue`)
 - **Persistent history** — past evaluations stored in the browser for 30 days, deduplicated per repo
 - **Generated files** — markdown files Claude Code creates during analysis are linked as chips, persisted under `/tmp` for 30 days
@@ -35,7 +37,7 @@ python app.py
 
 ## Claude Code Backends
 
-The app requires **both** the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) **and** an authentication method. If the CLI is not installed or no credentials are configured, the app will not function. Before each evaluation or follow-up, the app sends a quick availability ping and uses the first model that responds, in the order **Fable → Opus → Sonnet**. The result is cached for 5 minutes.
+The app requires **both** the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) **and** an authentication method. If the CLI is not installed or no credentials are configured, the app will not function. Before each evaluation or follow-up, the app sends a quick availability ping and uses the first model that responds. The model you pick in the UI toggle (**Opus**, the default, or **Fable**) is tried first, then Opus → Fable → Sonnet. The result is cached for 5 minutes.
 
 The app checks for the `claude` binary in `~/.local/bin/claude`, `~/bin/claude`, then `PATH`. When found, it runs Claude Code via subprocess with `--output-format stream-json --verbose` — this gives the richest experience with tool calls, file operations, and the full agent loop streamed live.
 
@@ -118,8 +120,8 @@ All settings with defaults are documented in `.env.default`. Key variables:
 | `CLAUDE_CODE_USE_FOUNDRY` | — | Set to `1` to use Azure AI Foundry (Option 3) |
 | `ANTHROPIC_FOUNDRY_BASE_URL` | — | Azure AI Foundry endpoint URL |
 | `ANTHROPIC_FOUNDRY_API_KEY` | — | Azure AI Foundry API key |
-| `ANTHROPIC_DEFAULT_FABLE_MODEL` | per-backend | Fable model, the preferred tier (used by the availability probe and the SDK fallback) |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | per-backend | Opus model, the first fallback tier |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL` | per-backend | Fable model, selectable in the UI (used by the availability probe and the SDK fallback) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | per-backend | Opus model, the default |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | per-backend | Sonnet model, the last fallback tier |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub token for higher clone rate limits |
 

@@ -271,6 +271,31 @@ body::before{
 }
 .cost-badge.loading{border-color:var(--orange);color:var(--orange)}
 .cost-badge.done{border-color:var(--green);color:var(--green)}
+.status-badge.cancelled,.cost-badge.cancelled{border-color:var(--border-bright);color:var(--text-secondary)}
+.btn-cancel{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:5px 14px;border-radius:20px;
+  font-family:var(--font-body);font-size:.75rem;font-weight:600;
+  border:1px solid var(--red);background:transparent;color:var(--red);
+  cursor:pointer;transition:background .15s,color .15s;
+}
+.btn-cancel:hover{background:var(--red);color:#fff}
+.btn-cancel:disabled{opacity:.5;cursor:default;background:transparent;color:var(--red)}
+.submit-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.model-toggle{
+  display:inline-flex;align-items:center;
+  border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--bg-inset);padding:3px;gap:2px;
+}
+.model-toggle-label{font-size:.75rem;color:var(--text-muted);padding:0 8px 0 6px}
+.model-toggle button{
+  font-family:var(--font-body);font-size:.8rem;font-weight:600;
+  border:none;border-radius:6px;background:transparent;
+  color:var(--text-secondary);padding:7px 14px;cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.model-toggle button:hover{color:var(--text-primary)}
+.model-toggle button[aria-pressed="true"]{background:var(--accent-dim);color:#fff}
 @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
 
 .results-card{
@@ -468,11 +493,16 @@ body::before{
             <label class="form-label" for="promptText">Prompt</label>
             <textarea class="form-textarea" id="promptText" placeholder="Select a template above or write your own prompt..." required></textarea>
           </div>
-          <div class="form-row">
+          <div class="form-row submit-row">
             <button class="btn-evaluate" type="submit" id="submitBtn">
               <svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg>
               Evaluate Now
             </button>
+            <div class="model-toggle" role="group" aria-label="Model">
+              <span class="model-toggle-label">Model</span>
+              <button type="button" data-model="opus" onclick="setModel('opus')" title="Claude Opus — default, lower cost">Opus</button>
+              <button type="button" data-model="fable" onclick="setModel('fable')" title="Claude Fable — most capable, higher cost">Fable</button>
+            </div>
           </div>
         </form>
       </div>
@@ -548,6 +578,49 @@ let lastStatusText = '';
 let ghAuthenticated = false;
 let evaluating = false;
 let eventSource = null;
+let currentAbort = null;       // AbortController for the in-flight evaluate/followup fetch
+let cancelRequested = false;   // user pressed Cancel on the running analysis
+
+// ── Model toggle (Opus default; remembered per browser) ──
+const MODEL_KEY = 'codecheck_model';
+let selectedModel = 'opus';
+try {
+  const saved = localStorage.getItem(MODEL_KEY);
+  if (saved === 'opus' || saved === 'fable') selectedModel = saved;
+} catch (e) {}
+
+function setModel(model) {
+  selectedModel = model;
+  try { localStorage.setItem(MODEL_KEY, model); } catch (e) {}
+  document.querySelectorAll('.model-toggle button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.model === model)));
+}
+
+// ── Cancel ──
+function cancelAnalysis() {
+  if (!evaluating || cancelRequested) return;
+  cancelRequested = true;
+  setStatus('loading', 'Cancelling...');
+  if (currentSessionId) {
+    // Server kills the git/claude process; the stream then ends on its own.
+    fetch('/api/cancel/' + currentSessionId, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => { if (!d.ok && currentAbort) currentAbort.abort(); })
+      .catch(() => { if (currentAbort) currentAbort.abort(); });
+  } else if (currentAbort) {
+    // No session id yet — dropping the connection makes the server kill the process.
+    currentAbort.abort();
+  }
+}
+
+function finishCancelled() {
+  setStatus('cancelled', 'Analysis cancelled');
+  if (isFollowingUp) {
+    isFollowingUp = false;           // the session survives; ask again any time
+  } else {
+    currentSessionId = '';           // server discarded the clone of a cancelled first run
+  }
+}
 const EVAL_LABEL = '<svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg> Evaluate Now';
 const FOLLOWUP_LABEL = '<svg viewBox="0 0 16 16" fill="none"><path d="M2 3l12 5-12 5V9l8-1-8-1V3z" fill="currentColor"/></svg> Ask Additional Questions';
 
@@ -592,6 +665,7 @@ function renderChatter(text) {
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
+  setModel(selectedModel);
   loadPrompts();
   checkGhAuth();
   loadHistory();
@@ -719,6 +793,8 @@ async function startEvaluation(repoUrl, prompt) {
   isFollowingUp = false;
   currentCost = null;
   costBase = 0;
+  cancelRequested = false;
+  currentAbort = new AbortController();
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -746,7 +822,8 @@ async function startEvaluation(repoUrl, prompt) {
     const res = await fetch('/api/evaluate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_url: repoUrl, prompt }),
+      body: JSON.stringify({ repo_url: repoUrl, prompt, model: selectedModel }),
+      signal: currentAbort.signal,
     });
 
     if (!res.ok) {
@@ -784,11 +861,14 @@ async function startEvaluation(repoUrl, prompt) {
       }
     }
   } catch (e) {
-    setStatus('error', 'Connection lost: ' + e.message);
+    if (cancelRequested) finishCancelled();
+    else setStatus('error', 'Connection lost: ' + e.message);
   }
 
   evaluating = false;
+  currentAbort = null;
   btn.disabled = false;
+  if (lastStatusType === 'loading') setStatus(lastStatusType, lastStatusText);
 }
 
 async function startFollowup(sessionId, prompt) {
@@ -797,6 +877,8 @@ async function startFollowup(sessionId, prompt) {
   // Keep currentRaw intact — we'll append to it when follow-up results arrive
   currentChatter = '';
   costBase = currentCost || 0;  // carry prior spend forward across follow-ups
+  cancelRequested = false;
+  currentAbort = new AbortController();
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
@@ -812,7 +894,8 @@ async function startFollowup(sessionId, prompt) {
     const res = await fetch('/api/followup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, prompt }),
+      body: JSON.stringify({ session_id: sessionId, prompt, model: selectedModel }),
+      signal: currentAbort.signal,
     });
 
     if (!res.ok) {
@@ -851,11 +934,14 @@ async function startFollowup(sessionId, prompt) {
       }
     }
   } catch (e) {
-    setStatus('error', 'Connection lost: ' + e.message);
+    if (cancelRequested) finishCancelled();
+    else setStatus('error', 'Connection lost: ' + e.message);
   }
 
   evaluating = false;
+  currentAbort = null;
   btn.disabled = false;
+  if (lastStatusType === 'loading') setStatus(lastStatusType, lastStatusText);
 }
 
 function handleSSE(event, data) {
@@ -958,7 +1044,8 @@ function handleSSE(event, data) {
     }
 
     case 'error':
-      setStatus('error', data);
+      if (cancelRequested) finishCancelled();
+      else setStatus('error', data);
       break;
   }
 }
@@ -981,7 +1068,11 @@ function setStatus(type, text) {
                type === 'error' ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' : '';
   const costPill = currentCost !== null
     ? `<span class="cost-badge ${type}">${formatCost(currentCost)}</span>` : '';
-  bar.innerHTML = `<span class="status-badge ${type}">${dot}${icon} ${escHtml(text)}</span>${costPill}`;
+  const cancelBtn = type === 'loading' && evaluating
+    ? `<button type="button" class="btn-cancel" onclick="cancelAnalysis()" title="Stop the analysis now"${cancelRequested ? ' disabled' : ''}>` +
+      '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/></svg> Cancel</button>'
+    : '';
+  bar.innerHTML = `<span class="status-badge ${type}">${dot}${icon} ${escHtml(text)}</span>${costPill}${cancelBtn}`;
 }
 
 // Coarse display so the counter doesn't flicker: 10-cent steps below $1,
